@@ -1,0 +1,61 @@
+name: check-cloaking-drift
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - prod
+    paths:
+      - 'src/services/claudeCloakingUtils.js'
+      - 'scripts/sync-cloaking-constants.sh'
+      - '.github/workflows/check-cloaking-drift.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run drift detector
+        run: ./scripts/sync-cloaking-constants.sh
+
+      - name: Open issue on drift
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Cloaking constants drifted from upstream opencode-anthropic-auth';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'cloaking-drift'
+            });
+            if (existing.data.some(i => i.title === title)) {
+              core.info('Drift issue already open, skipping.');
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: ['cloaking-drift'],
+              body: [
+                'The scheduled `check-cloaking-drift` job detected that',
+                '`src/services/claudeCloakingUtils.js` no longer matches',
+                'ex-machina-co/opencode-anthropic-auth `src/constants.ts`.',
+                '',
+                'See the failed run for the diff:',
+                `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                '',
+                'Update the three tables (OPENCODE_IDENTITY_PREFIX,',
+                'PARAGRAPH_REMOVAL_ANCHORS, TEXT_REPLACEMENTS), commit',
+                'to `prod`, tag a new opencode-N release, redeploy.'
+              ].join('\n')
+            });
