@@ -86,7 +86,7 @@ extract_ts_replacement_pairs() {
     );
     const m = src.match(re);
     if (!m) { process.exit(3); }
-    const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*\}/g;
+    const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*,?\s*\}/g;
     let pair;
     while ((pair = objRe.exec(m[1])) !== null) {
       process.stdout.write(pair[1] + "=>" + pair[2] + "\n");
@@ -143,7 +143,7 @@ extract_js_replacement_pairs() {
     );
     const m = src.match(re);
     if (!m) { process.exit(3); }
-    const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*\}/g;
+    const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*,?\s*\}/g;
     let pair;
     while ((pair = objRe.exec(m[1])) !== null) {
       process.stdout.write(pair[1] + "=>" + pair[2] + "\n");
