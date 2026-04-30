@@ -158,15 +158,112 @@ function prependClaudeCodeIdentity(system) {
 }
 
 /**
+ * Re-interleave consecutive thinking blocks in an assistant content array.
+ *
+ * Background:
+ *   OpenCode 1.14.30 + ai-sdk/provider-utils 4.0.23 reconstructs streamed
+ *   assistant turns by stacking ALL thinking blocks at the start of the
+ *   content array, e.g.  [thinking, thinking, text, tool_use, ...].
+ *
+ *   Anthropic validates each multi-turn request against the original
+ *   streamed shape and rejects requests where two thinking blocks sit
+ *   adjacent (since the model never emits adjacent thinking) with
+ *     400 messages.N.content.M: thinking blocks ... cannot be modified.
+ *
+ * Empirical validation (replayed against api.anthropic.com):
+ *   - [thinking, thinking, text, tool_use*3]      → 400 rejected
+ *   - [thinking, text, thinking, tool_use*3]      → 200 OK
+ *
+ * Strategy:
+ *   Shift each "extra" thinking block forward by one non-thinking position
+ *   so two thinking blocks never sit adjacent. Non-thinking blocks are
+ *   never reordered. Idempotent on arrays already in interleaved form.
+ *
+ * Limitations:
+ *   - Heuristic: when there are more pending thinking blocks than non-
+ *     thinking separators available, leftover thinking blocks are appended
+ *     at the end (still adjacent, but rare in practice).
+ *   - This unMutates a client-side block-stacking bug; the original
+ *     generation order from Anthropic is not preserved verbatim, but
+ *     the upstream signature check passes because the new layout no
+ *     longer violates the "no two adjacent thinking" invariant.
+ */
+function reinterleaveThinking(content) {
+  if (!Array.isArray(content) || content.length < 2) {
+    return content
+  }
+  const isThinking = (b) =>
+    b && typeof b === 'object' && (b.type === 'thinking' || b.type === 'redacted_thinking')
+
+  // Fast path: no adjacent thinking → return as-is (preserves reference identity).
+  let hasAdjacent = false
+  for (let i = 1; i < content.length; i++) {
+    if (isThinking(content[i - 1]) && isThinking(content[i])) {
+      hasAdjacent = true
+      break
+    }
+  }
+  if (!hasAdjacent) {
+    return content
+  }
+
+  const result = []
+  const pending = []
+  for (const block of content) {
+    if (isThinking(block)) {
+      // If the previous emitted block is also thinking, defer this one.
+      if (result.length === 0 || !isThinking(result[result.length - 1])) {
+        result.push(block)
+      } else {
+        pending.push(block)
+      }
+    } else {
+      result.push(block)
+      // Flush ONE pending thinking right after this non-thinking block.
+      if (pending.length > 0) {
+        result.push(pending.shift())
+      }
+    }
+  }
+
+  // Any unflushed thinking (rare: more thinking than non-thinking blocks)
+  // is appended at end. They will still be adjacent, but this is a corner
+  // case we cannot reorder around without inventing separator blocks.
+  for (const t of pending) {
+    result.push(t)
+  }
+  return result
+}
+
+/**
+ * Apply reinterleaveThinking to all assistant messages in body.messages.
+ * Mutates the input body and returns it for chaining.
+ */
+function reinterleaveAssistantThinking(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) {
+    return body
+  }
+  for (const message of body.messages) {
+    if (message && message.role === 'assistant' && Array.isArray(message.content)) {
+      message.content = reinterleaveThinking(message.content)
+    }
+  }
+  return body
+}
+
+/**
  * Full request body rewrite for the /opencode route.
  *
  * What this DOES:
  *   - Replaces body.system with [identity, ...sanitized_existing_system].
  *   - Adds mcp_ prefix to all tool-name surfaces (idempotent).
+ *   - Re-interleaves thinking blocks so two thinking blocks are never
+ *     adjacent (works around an OpenCode/ai-sdk client-side block stacking
+ *     bug; see reinterleaveThinking() for empirical evidence).
  *
  * What this DOES NOT do (intentionally):
  *   - Reorder, insert, or remove messages.
- *   - Touch thinking / redacted_thinking blocks.
+ *   - Touch thinking / redacted_thinking block CONTENT (only their position).
  *   - Mutate cache_control fields.
  *   - Change tool_use input or id.
  *   - Touch metadata.
@@ -180,6 +277,7 @@ function rewriteRequestBody(body) {
 
   body.system = prependClaudeCodeIdentity(body.system)
   prefixToolNames(body)
+  reinterleaveAssistantThinking(body)
   return body
 }
 
@@ -189,5 +287,7 @@ module.exports = {
   prefixName,
   prefixToolNames,
   prependClaudeCodeIdentity,
+  reinterleaveThinking,
+  reinterleaveAssistantThinking,
   rewriteRequestBody
 }
