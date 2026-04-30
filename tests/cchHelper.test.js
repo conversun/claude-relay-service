@@ -1,5 +1,6 @@
 const {
   extractFirstUserMessageText,
+  extractClaudeCodeVersionFromUserAgent,
   computeCCH,
   computeVersionSuffix,
   buildBillingHeaderValue,
@@ -183,7 +184,13 @@ describe('cchHelper / edge cases', () => {
         .update(`${CCH_SALT}000${CLAUDE_CODE_VERSION}`)
         .digest('hex')
         .slice(0, 3)
-      expect(computeVersionSuffix('abc')).toBe(expected)
+      expect(computeVersionSuffix('abc', CLAUDE_CODE_VERSION)).toBe(expected)
+    })
+
+    it('returns null instead of using a hardcoded fallback when version is missing', () => {
+      expect(computeVersionSuffix('abc')).toBeNull()
+      expect(computeVersionSuffix('abc', '')).toBeNull()
+      expect(computeVersionSuffix('abc', null)).toBeNull()
     })
 
     it('different version produces different suffix (with same text)', () => {
@@ -194,8 +201,16 @@ describe('cchHelper / edge cases', () => {
   })
 
   describe('buildBillingHeaderValue() composition', () => {
-    it('uses default constants when version/entrypoint omitted', () => {
+    it('returns null when version is omitted so live traffic cannot silently hardcode one', () => {
       const out = buildBillingHeaderValue([{ role: 'user', content: 'hello world test message' }])
+      expect(out).toBeNull()
+    })
+
+    it('uses default entrypoint when version is provided', () => {
+      const out = buildBillingHeaderValue(
+        [{ role: 'user', content: 'hello world test message' }],
+        CLAUDE_CODE_VERSION
+      )
       expect(out).toContain(`cc_version=${CLAUDE_CODE_VERSION}.`)
       expect(out).toContain(`cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT};`)
       expect(out).toMatch(/cch=[0-9a-f]{5};$/)
@@ -217,6 +232,27 @@ describe('cchHelper / edge cases', () => {
       const out = buildBillingHeaderValue([{ role: 'user', content: 'x' }], '2.1.87', 'sdk-cli')
       expect(out).not.toMatch(/\n/)
       expect(out.endsWith(';')).toBe(true)
+    })
+  })
+
+  describe('extractClaudeCodeVersionFromUserAgent()', () => {
+    it('extracts stable Claude Code versions from outgoing User-Agent', () => {
+      expect(extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.87 (external, cli)')).toBe(
+        '2.1.87'
+      )
+    })
+
+    it('extracts prerelease/build-shaped versions without forcing semver parsing', () => {
+      expect(extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.0-beta.1 (external, cli)')).toBe(
+        '2.1.0-beta.1'
+      )
+    })
+
+    it('returns null for non-Claude-Code or malformed user agents', () => {
+      expect(extractClaudeCodeVersionFromUserAgent('opencode/1.0')).toBeNull()
+      expect(extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.87')).toBeNull()
+      expect(extractClaudeCodeVersionFromUserAgent('')).toBeNull()
+      expect(extractClaudeCodeVersionFromUserAgent(null)).toBeNull()
     })
   })
 
