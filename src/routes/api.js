@@ -556,7 +556,8 @@ async function handleMessagesRequest(req, res) {
                 JSON.stringify(usageData)
               )
             }
-          }
+          },
+          { isOpenCodeMode: req._openCodeMode === true }
         )
       } else if (accountType === 'claude-console') {
         // Claude Console账号使用Console转发服务（需要传递accountId）
@@ -1139,7 +1140,8 @@ async function handleMessagesRequest(req, res) {
           _apiKeyNonStream,
           req, // clientRequest 用于断开检测，保留但服务层已优化
           res,
-          _headersNonStream
+          _headersNonStream,
+          { isOpenCodeMode: req._openCodeMode === true }
         )
       } else if (accountType === 'claude-console') {
         // Claude Console账号使用Console转发服务
@@ -1778,7 +1780,8 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
 
     const relayOptions = {
       skipUsageRecord: true,
-      customPath: '/v1/messages/count_tokens'
+      customPath: '/v1/messages/count_tokens',
+      isOpenCodeMode: req._openCodeMode === true
     }
 
     const response =

@@ -605,7 +605,12 @@ class ClaudeRelayService {
       const accessToken = await claudeAccountService.getValidAccessToken(accountId)
 
       const isRealClaudeCodeRequest = this._isActualClaudeCodeRequest(requestBody, clientHeaders)
-      const processedBody = this._processRequestBody(requestBody, account, isRealClaudeCodeRequest)
+      const processedBody = this._processRequestBody(
+        requestBody,
+        account,
+        isRealClaudeCodeRequest,
+        options?.isOpenCodeMode === true
+      )
       // 🧹 内存优化：存储到 bodyStore，避免闭包捕获
       const originalBodyString = JSON.stringify(processedBody)
       bodyStoreIdNonStream = ++this._bodyStoreIdCounter
@@ -1108,9 +1113,31 @@ class ClaudeRelayService {
   }
 
   // 🔄 处理请求体
-  _processRequestBody(body, account = null, isRealClaudeCodeOverride = undefined) {
+  _processRequestBody(
+    body,
+    account = null,
+    isRealClaudeCodeOverride = undefined,
+    isOpenCodeMode = false
+  ) {
     if (!body) {
       return body
+    }
+
+    // 🛤️ OpenCode 专用极简路径：路由层 (/opencode/v1/messages) 已通过
+    // openCodeTransform 完成 system 清洗 + Claude Code identity 前置 + 工具名 mcp_ 前缀；
+    // 这里仅做与 thinking 块语境无关的标准化（max_tokens 校验、删除 top_p、统一 client_id），
+    // 严禁触碰 messages 数组、cache_control、system 重定位、orphan tool_use 修补 ——
+    // 任何此类 mutation 都会让带 thinking 块的多轮请求触发 "thinking blocks cannot be modified"。
+    if (isOpenCodeMode) {
+      const processedBodyOC = safeClone(body)
+      this._validateAndLimitMaxTokens(processedBodyOC)
+      if (processedBodyOC.top_p !== undefined && processedBodyOC.top_p !== null) {
+        delete processedBodyOC.top_p
+      }
+      if (account && account.useUnifiedClientId === 'true' && account.unifiedClientId) {
+        this._replaceClientId(processedBodyOC, account.unifiedClientId)
+      }
+      return processedBodyOC
     }
 
     // 使用 safeClone 替代 JSON.parse(JSON.stringify()) 提升性能
@@ -1600,7 +1627,8 @@ class ClaudeRelayService {
     finalHeaders = extensionResult.headers
 
     let toolNameMap = null
-    if (!isRealClaudeCode) {
+    // OpenCode 路由已在入口层应用幂等的 mcp_ 前缀，跳过运行时转换避免双重前缀
+    if (!isRealClaudeCode && !requestOptions.isOpenCodeMode) {
       toolNameMap = this._transformToolNamesInRequestBody(requestPayload, {
         useRandomizedToolNames: requestOptions.useRandomizedToolNames === true
       })
@@ -2017,7 +2045,12 @@ class ClaudeRelayService {
       const accessToken = await claudeAccountService.getValidAccessToken(accountId)
 
       const isRealClaudeCodeRequest = this._isActualClaudeCodeRequest(requestBody, clientHeaders)
-      const processedBody = this._processRequestBody(requestBody, account, isRealClaudeCodeRequest)
+      const processedBody = this._processRequestBody(
+        requestBody,
+        account,
+        isRealClaudeCodeRequest,
+        options?.isOpenCodeMode === true
+      )
       // 🧹 内存优化：存储到 bodyStore，不放入 requestOptions 避免闭包捕获
       const originalBodyString = JSON.stringify(processedBody)
       const bodyStoreId = ++this._bodyStoreIdCounter

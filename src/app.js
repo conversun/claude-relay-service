@@ -28,6 +28,7 @@ const droidRoutes = require('./routes/droidRoutes')
 const userRoutes = require('./routes/userRoutes')
 const azureOpenaiRoutes = require('./routes/azureOpenaiRoutes')
 const webhookRoutes = require('./routes/webhook')
+const openCodeRoutes = require('./routes/openCodeRoutes')
 
 // Import middleware
 const {
@@ -331,6 +332,7 @@ class Application {
       this.app.use('/api', apiRoutes)
       this.app.use('/api', unifiedRoutes) // 统一智能路由（支持 /v1/chat/completions 等）
       this.app.use('/claude', apiRoutes) // /claude 路由别名，与 /api 功能相同
+      this.app.use('/opencode', openCodeRoutes) // OpenCode 专用极简路径：避免 thinking 块语境被 mutation pipeline 破坏
       // Anthropic (Claude Code) 路由：按路径强制分流到 Gemini OAuth 账户
       // - /antigravity/api/v1/messages -> Antigravity OAuth
       // - /gemini-cli/api/v1/messages -> Gemini CLI OAuth
