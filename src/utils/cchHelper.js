@@ -16,16 +16,17 @@
  *                  where chars = sampled characters of the same text at
  *                  CCH_POSITIONS (default char fallback = '0').
  *
- * Ported byte-for-byte from opencode-anthropic-auth/src/cch.ts at upstream
- * commit fdc7837 (origin/main HEAD as of 2026-04-30). Parity verified by
- * tests/cchHelper.test.js against upstream's known vectors.
+ * Ported from opencode-anthropic-auth/src/cch.ts at upstream commit fdc7837
+ * (origin/main HEAD as of 2026-04-30). Parity verified by
+ * tests/cchHelper.test.js against upstream's known vectors. Unlike upstream,
+ * this relay does NOT use a hardcoded Claude Code version for live traffic:
+ * callers must pass the version parsed from the outgoing Claude Code UA (or an
+ * explicit operator override). The exported CLAUDE_CODE_VERSION is retained
+ * only as a drift-checked upstream reference constant.
  *
- * IMPORTANT: This module is intentionally NOT wired into _processRequestBody
- * yet. Wiring is a separate decision (see P3 in the OpenCode posture
- * roadmap) — the current relay still actively REMOVES client-supplied
- * billing headers via _removeBillingHeaderFromSystem and does not inject
- * a server-side replacement. This helper exists to make that wiring a
- * one-liner when the integration is sanctioned.
+ * IMPORTANT: _processRequestBody still strips client-supplied billing headers.
+ * Server-side injection happens later, after the relay resolves the outgoing
+ * User-Agent, so the billing version follows the actual dynamic UA.
  */
 
 const { createHash } = require('crypto')
@@ -36,8 +37,31 @@ const { createHash } = require('crypto')
 //    Do NOT edit these without running the drift checker afterwards.
 const CCH_SALT = '59cf53e54c78'
 const CCH_POSITIONS = [4, 7, 20]
+// Reference only. Do NOT use as a live default; parse the outgoing UA instead.
 const CLAUDE_CODE_VERSION = '2.1.87'
 const CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * Extract Claude Code version from a Claude Code User-Agent.
+ *
+ * Examples:
+ *   claude-cli/2.1.87 (external, cli)      → 2.1.87
+ *   claude-cli/2.1.0-beta.1 (external, cli) → 2.1.0-beta.1
+ *
+ * @param {string} userAgent
+ * @returns {string|null}
+ */
+function extractClaudeCodeVersionFromUserAgent(userAgent) {
+  if (!isNonEmptyString(userAgent)) {
+    return null
+  }
+  const match = userAgent.match(/^claude-cli\/([^\s]+)\s+\(/i)
+  return match ? match[1] : null
+}
 
 /**
  * Extract text from the first user message's first text block.
@@ -90,10 +114,13 @@ function computeCCH(messageText) {
  * concatenates SALT + chars + version, takes first 3 hex of SHA-256.
  *
  * @param {string} messageText
- * @param {string} version - default CLAUDE_CODE_VERSION
- * @returns {string} 3-char lowercase hex
+ * @param {string} version - required Claude Code version parsed from outgoing UA
+ * @returns {string|null} 3-char lowercase hex, or null when version is missing
  */
-function computeVersionSuffix(messageText, version = CLAUDE_CODE_VERSION) {
+function computeVersionSuffix(messageText, version) {
+  if (!isNonEmptyString(version)) {
+    return null
+  }
   const text = String(messageText)
   const chars = CCH_POSITIONS.map((index) => text[index] || '0').join('')
 
@@ -104,15 +131,14 @@ function computeVersionSuffix(messageText, version = CLAUDE_CODE_VERSION) {
  * Build the complete billing header string for insertion into system[0].
  *
  * @param {Array} messages - messages array
- * @param {string} version - default CLAUDE_CODE_VERSION
+ * @param {string} version - required Claude Code version parsed from outgoing UA
  * @param {string} entrypoint - default CLAUDE_CODE_ENTRYPOINT (e.g. 'sdk-cli')
- * @returns {string} full `x-anthropic-billing-header: ...;` line
+ * @returns {string|null} full `x-anthropic-billing-header: ...;` line, or null when version missing
  */
-function buildBillingHeaderValue(
-  messages,
-  version = CLAUDE_CODE_VERSION,
-  entrypoint = CLAUDE_CODE_ENTRYPOINT
-) {
+function buildBillingHeaderValue(messages, version, entrypoint = CLAUDE_CODE_ENTRYPOINT) {
+  if (!isNonEmptyString(version)) {
+    return null
+  }
   const text = extractFirstUserMessageText(messages)
   const suffix = computeVersionSuffix(text, version)
   const cch = computeCCH(text)
@@ -128,6 +154,7 @@ function buildBillingHeaderValue(
 module.exports = {
   // functions
   extractFirstUserMessageText,
+  extractClaudeCodeVersionFromUserAgent,
   computeCCH,
   computeVersionSuffix,
   buildBillingHeaderValue,
