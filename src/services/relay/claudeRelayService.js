@@ -1143,30 +1143,13 @@ class ClaudeRelayService {
     // 使用 safeClone 替代 JSON.parse(JSON.stringify()) 提升性能
     const processedBody = safeClone(body)
 
-    // 🧠 检测请求中是否含 thinking/redacted_thinking 块
-    // 上游 Claude API 对 thinking 块有严格签名校验：消息序列、内容块结构（包括兄弟块的
-    // cache_control）任一被修改都会触发 "thinking blocks cannot be modified" 错误。
-    // 一旦命中，必须走"thinking-aware"极简路径，避免常规转换破坏 thinking 块语境。
-    const hasThinkingBlocks =
-      Array.isArray(processedBody.messages) &&
-      processedBody.messages.some(
-        (m) =>
-          Array.isArray(m?.content) &&
-          m.content.some((c) => c?.type === 'thinking' || c?.type === 'redacted_thinking')
-      )
-
-    // _patchOrphanedToolUse 会注入合成 user/tool_result 消息，改变消息序列；
-    // 含 thinking 块时跳过，避免破坏 latest assistant message 的索引/上下文
-    if (!hasThinkingBlocks) {
-      processedBody.messages = this._patchOrphanedToolUse(processedBody.messages)
-    }
+    processedBody.messages = this._patchOrphanedToolUse(processedBody.messages)
 
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)
 
     // 移除cache_control中的ttl字段
-    // 含 thinking 块时仅处理 system，避免动到 messages 内容块的 cache_control
-    this._stripTtlFromCacheControl(processedBody, { skipMessages: hasThinkingBlocks })
+    this._stripTtlFromCacheControl(processedBody)
 
     // 判断是否是真实的 Claude Code 请求
     // 优先使用调用方传入的值（基于 UA + system prompt 综合判断），
@@ -1181,64 +1164,45 @@ class ClaudeRelayService {
     // 原因：Anthropic 基于 system 参数内容检测第三方应用，仅前置追加 Claude Code 提示词
     //       无法通过检测，因为后续内容仍为非 Claude Code 格式
     if (!isRealClaudeCode) {
-      if (hasThinkingBlocks) {
-        // 🧠 thinking-aware 路径：仅在 system 数组前置 Claude Code 标识，不动 messages
-        // 原始 system 紧随 Claude Code 标识之后，模型仍能收到完整指令；
-        // 这与 opencode-anthropic-auth 的策略一致——避免重排消息破坏 thinking 块语境
-        let systemArray
-        if (Array.isArray(processedBody.system)) {
-          systemArray = processedBody.system.map((item) => {
-            if (item && item.type === 'text' && typeof item.text === 'string') {
-              return { ...item, text: sanitizeSystemText(item.text) }
+      // 提取原始 system prompt 文本
+      let originalSystemText = ''
+      if (typeof processedBody.system === 'string') {
+        originalSystemText = processedBody.system
+      } else if (Array.isArray(processedBody.system)) {
+        originalSystemText = processedBody.system
+          .filter((item) => item && item.type === 'text' && item.text)
+          .map((item) => item.text)
+          .join('\n\n')
+      }
+
+      // 🧼 剥离 OpenCode 等第三方 CLI 的品牌字样，避免在下一步搬运到
+      //    user message 时把 "You are OpenCode"、opencode 的 GitHub/docs
+      //    URL、"if OpenCode honestly" 等标记原样透出给上游
+      originalSystemText = sanitizeSystemText(originalSystemText)
+
+      // 将 system 替换为 Claude Code 标准提示词
+      processedBody.system = this.claudeCodeSystemPrompt
+
+      // 将（已清洗的）原始 system prompt 作为 user/assistant 消息对注入到 messages 开头
+      // 模型仍通过 messages 接收完整指令，保留客户端功能
+      if (originalSystemText && originalSystemText.trim()) {
+        const instructionMessage = {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `[System Instructions - follow these strictly]\n${originalSystemText.trim()}`
             }
-            return item
-          })
-        } else if (typeof processedBody.system === 'string' && processedBody.system.trim()) {
-          systemArray = [{ type: 'text', text: sanitizeSystemText(processedBody.system) }]
-        } else {
-          systemArray = []
+          ]
         }
-        processedBody.system = [{ type: 'text', text: this.claudeCodeSystemPrompt }, ...systemArray]
-      } else {
-        // 默认策略：将原始 system prompt 迁移至 messages，system 仅保留 Claude Code 标识
-        // 原因：Anthropic 基于 system 参数内容检测第三方应用，仅前置追加 Claude Code 提示词
-        //       无法通过检测，因为后续内容仍为非 Claude Code 格式
-        let originalSystemText = ''
-        if (typeof processedBody.system === 'string') {
-          originalSystemText = processedBody.system
-        } else if (Array.isArray(processedBody.system)) {
-          originalSystemText = processedBody.system
-            .filter((item) => item && item.type === 'text' && item.text)
-            .map((item) => item.text)
-            .join('\n\n')
+        const ackMessage = {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Understood. I will follow these instructions.' }]
         }
-
-        // 🧼 剥离 OpenCode 等第三方 CLI 的品牌字样
-        originalSystemText = sanitizeSystemText(originalSystemText)
-
-        // 将 system 替换为 Claude Code 标准提示词
-        processedBody.system = this.claudeCodeSystemPrompt
-
-        // 将（已清洗的）原始 system prompt 作为 user/assistant 消息对注入到 messages 开头
-        if (originalSystemText && originalSystemText.trim()) {
-          const instructionMessage = {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: `[System Instructions - follow these strictly]\n${originalSystemText.trim()}`
-              }
-            ]
-          }
-          const ackMessage = {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'Understood. I will follow these instructions.' }]
-          }
-          if (!Array.isArray(processedBody.messages)) {
-            processedBody.messages = []
-          }
-          processedBody.messages.unshift(instructionMessage, ackMessage)
+        if (!Array.isArray(processedBody.messages)) {
+          processedBody.messages = []
         }
+        processedBody.messages.unshift(instructionMessage, ackMessage)
       }
     }
 
@@ -1263,9 +1227,7 @@ class ClaudeRelayService {
     // 移除 x-anthropic-billing-header 系统元素，避免将客户端 billing 标识传递给上游 API
     this._removeBillingHeaderFromSystem(processedBody)
 
-    // 含 thinking 块时仅处理 system 上的 cache_control 限制，
-    // 避免改动 messages 内容块（即使是同消息中的 sibling 块）破坏 thinking 块语境
-    this._enforceCacheControlLimit(processedBody, { skipMessages: hasThinkingBlocks })
+    this._enforceCacheControlLimit(processedBody)
 
     // 处理原有的系统提示（如果配置了）
     if (this.systemPrompt && this.systemPrompt.trim()) {
@@ -1414,11 +1376,10 @@ class ClaudeRelayService {
   }
 
   // 🧹 移除TTL字段
-  _stripTtlFromCacheControl(body, options = {}) {
+  _stripTtlFromCacheControl(body) {
     if (!body || typeof body !== 'object') {
       return
     }
-    const { skipMessages = false } = options
 
     const processContentArray = (contentArray) => {
       if (!Array.isArray(contentArray)) {
@@ -1439,7 +1400,7 @@ class ClaudeRelayService {
       processContentArray(body.system)
     }
 
-    if (!skipMessages && Array.isArray(body.messages)) {
+    if (Array.isArray(body.messages)) {
       body.messages.forEach((message) => {
         if (message && Array.isArray(message.content)) {
           processContentArray(message.content)
@@ -1449,18 +1410,17 @@ class ClaudeRelayService {
   }
 
   // ⚖️ 限制带缓存控制的内容数量
-  _enforceCacheControlLimit(body, options = {}) {
+  _enforceCacheControlLimit(body) {
     const MAX_CACHE_CONTROL_BLOCKS = 4
 
     if (!body || typeof body !== 'object') {
       return
     }
-    const { skipMessages = false } = options
 
     const countCacheControlBlocks = () => {
       let total = 0
 
-      if (!skipMessages && Array.isArray(body.messages)) {
+      if (Array.isArray(body.messages)) {
         body.messages.forEach((message) => {
           if (!message || !Array.isArray(message.content)) {
             return
@@ -1486,7 +1446,7 @@ class ClaudeRelayService {
 
     // 只移除 cache_control 属性，保留内容本身，避免丢失用户消息
     const removeCacheControlFromMessages = () => {
-      if (skipMessages || !Array.isArray(body.messages)) {
+      if (!Array.isArray(body.messages)) {
         return false
       }
 
