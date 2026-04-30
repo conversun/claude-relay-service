@@ -1152,7 +1152,7 @@ class ClaudeConsoleRelayService {
                 // 如果有 streamTransformer（如测试请求），使用前端期望的格式
                 if (streamTransformer) {
                   responseStream.write(
-                    `data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`
+                    `data: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: error.message } })}\n\n`
                   )
                 } else {
                   responseStream.write('event: error\n')
@@ -1262,7 +1262,7 @@ class ClaudeConsoleRelayService {
               // 如果有 streamTransformer（如测试请求），使用前端期望的格式
               if (streamTransformer) {
                 responseStream.write(
-                  `data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`
+                  `data: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: error.message } })}\n\n`
                 )
               } else {
                 responseStream.write('event: error\n')
@@ -1341,7 +1341,7 @@ class ClaudeConsoleRelayService {
             // 如果有 streamTransformer（如测试请求），使用前端期望的格式
             if (streamTransformer) {
               responseStream.write(
-                `data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`
+                `data: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: error.message } })}\n\n`
               )
             } else {
               responseStream.write('event: error\n')
