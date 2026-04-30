@@ -1164,6 +1164,82 @@ class ClaudeRelayService {
     return patched
   }
 
+  // 🧠 重排 assistant 消息中相邻的 thinking 块，避免上游 thinking-blocks-modified 校验拒绝
+  //
+  // 背景：OpenCode 1.14.30 + ai-sdk/provider-utils 4.0.23 在重组流式 assistant 回合时，
+  //       会把所有 thinking 块堆在 content 数组开头，例如
+  //         [thinking, thinking, text, tool_use, ...]
+  //       Anthropic 跨多轮请求会按原始流式形态校验，相邻 thinking 被视为客户端篡改，
+  //       返回 400 messages.N.content.M: thinking blocks ... cannot be modified。
+  //
+  // 实证（重放真实 wire dump 至 api.anthropic.com）：
+  //   - [thinking, thinking, text, tool_use*3]    → 400
+  //   - [thinking, text, thinking, tool_use*3]    → 200
+  //
+  // 算法：把每个“多余”的 thinking 块向后挪一个非 thinking 位置，使两个 thinking 永不相邻。
+  //       - 幂等：本来就交错的数组原样返回（fast-path 检测无相邻，零分配）。
+  //       - 保守：仅移动 thinking/redacted_thinking 块；其他类型保持原顺序。
+  //       - 有界：每个 thinking 至多越过一个非 thinking 块。
+  //       - 病态情况（thinking 比非 thinking 多）：剩余 thinking 追加在末尾，仍相邻，
+  //                                              但极少出现且无法在不杜撰块的前提下化解。
+  _reinterleaveThinking(content) {
+    if (!Array.isArray(content) || content.length < 2) {
+      return content
+    }
+    const isThinking = (b) =>
+      b && typeof b === 'object' && (b.type === 'thinking' || b.type === 'redacted_thinking')
+
+    // Fast path：无相邻 thinking → 返回原引用，零分配
+    let hasAdjacent = false
+    for (let i = 1; i < content.length; i++) {
+      if (isThinking(content[i - 1]) && isThinking(content[i])) {
+        hasAdjacent = true
+        break
+      }
+    }
+    if (!hasAdjacent) {
+      return content
+    }
+
+    const result = []
+    const pending = []
+    for (const block of content) {
+      if (isThinking(block)) {
+        // 上一个 emit 的也是 thinking → 推迟当前块
+        if (result.length === 0 || !isThinking(result[result.length - 1])) {
+          result.push(block)
+        } else {
+          pending.push(block)
+        }
+      } else {
+        result.push(block)
+        // 在该非 thinking 块之后冲一个 pending thinking 出来
+        if (pending.length > 0) {
+          result.push(pending.shift())
+        }
+      }
+    }
+
+    // 病态情况：剩余 pending thinking 直接追加在末尾（仍相邻，无法化解）
+    for (const t of pending) {
+      result.push(t)
+    }
+    return result
+  }
+
+  // 🧠 对 messages 中所有 assistant 消息的 content 应用 _reinterleaveThinking
+  _reinterleaveAssistantThinking(messages) {
+    if (!Array.isArray(messages)) {
+      return messages
+    }
+    for (const message of messages) {
+      if (message && message.role === 'assistant' && Array.isArray(message.content)) {
+        message.content = this._reinterleaveThinking(message.content)
+      }
+    }
+    return messages
+  }
+
   // 🔄 处理请求体
   _processRequestBody(body, account = null, isRealClaudeCodeOverride = undefined) {
     if (!body) {
@@ -1174,6 +1250,7 @@ class ClaudeRelayService {
     const processedBody = safeClone(body)
 
     processedBody.messages = this._patchOrphanedToolUse(processedBody.messages)
+    processedBody.messages = this._reinterleaveAssistantThinking(processedBody.messages)
 
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)
