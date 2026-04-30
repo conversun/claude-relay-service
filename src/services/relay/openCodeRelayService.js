@@ -19,6 +19,7 @@
  * 提前甄别，本 service 不做兜底转发。
  */
 
+const fs = require('fs')
 const https = require('https')
 const { URL } = require('url')
 const config = require('../../../config/config')
@@ -37,6 +38,36 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages?beta=true'
 // opencode-anthropic-auth REQUIRED_BETAS
 // 这两个 beta 缺一会让多轮 thinking blocks 报 "thinking blocks cannot be modified"
 const REQUIRED_BETAS = ['oauth-2025-04-20', 'interleaved-thinking-2025-05-14']
+
+// 🔍 Wire-level dump (env-controlled)
+//   OPENCODE_WIRE_DUMP=true 启用
+//   OPENCODE_WIRE_DUMP_PATH 路径（默认 /app/opencode-wire-dump.jsonl）
+// dump 内容：即将 write 给上游 socket 的完整字节，附 redacted headers
+// 用于诊断 thinking-block byte-equality 问题。
+const WIRE_DUMP_ENABLED = process.env.OPENCODE_WIRE_DUMP === 'true'
+const WIRE_DUMP_PATH = process.env.OPENCODE_WIRE_DUMP_PATH || '/app/opencode-wire-dump.jsonl'
+
+function dumpWireRequest({ accountId, headers, bodyString }) {
+  if (!WIRE_DUMP_ENABLED) {
+    return
+  }
+  try {
+    const redactedHeaders = { ...headers }
+    if (redactedHeaders.authorization) {
+      redactedHeaders.authorization = '[REDACTED]'
+    }
+    const record = {
+      ts: new Date().toISOString(),
+      accountId,
+      headers: redactedHeaders,
+      bodyLen: Buffer.byteLength(bodyString, 'utf8'),
+      body: bodyString
+    }
+    fs.appendFileSync(WIRE_DUMP_PATH, `${JSON.stringify(record)}\n`)
+  } catch (error) {
+    logger.warn(`⚠️ [OpenCode] Wire dump failed: ${error.message}`)
+  }
+}
 
 class OpenCodeRelayService {
   // 🌊 流式转发主入口
@@ -308,6 +339,7 @@ class OpenCodeRelayService {
         upstreamReq.destroy(new Error('Upstream request timeout'))
       })
 
+      dumpWireRequest({ accountId, headers, bodyString })
       upstreamReq.write(bodyString)
       upstreamReq.end()
     })
