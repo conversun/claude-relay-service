@@ -557,7 +557,8 @@ async function handleMessagesRequest(req, res) {
               )
             }
           },
-          { isOpenCodeMode: req._openCodeMode === true }
+          null, // streamTransformer占位（第 6 参，生产这里不需转换）
+          { isOpenCodeMode: req._openCodeMode === true } // 第 7 参 options
         )
       } else if (accountType === 'claude-console') {
         // Claude Console账号使用Console转发服务（需要传递accountId）
