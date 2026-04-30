@@ -137,9 +137,10 @@ class OpenCodeRelayService {
       'anthropic-beta': mergedBetas,
       'anthropic-version': filtered['anthropic-version'] || '2023-06-01',
       // 强制 identity 编码避免 Cloudflare 返 gzip 不带 Content-Encoding 头导致 SSE 损坏
-      'accept-encoding': 'identity',
-      // 不向上游透传 x-api-key（OAuth 路径必须删）
-      'x-api-key': undefined
+      'accept-encoding': 'identity'
+      // 注：filterForClaude 是白名单过滤，本身就不会透传 x-api-key；并且上面用
+      // authorization: Bearer 覆盖授权。不必（也不能）在此写 'x-api-key': undefined—
+      // Node.js https.request 拒绝 undefined header 值（ERR_HTTP_INVALID_HEADER_VALUE）。
     }
   }
 
