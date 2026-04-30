@@ -21,6 +21,11 @@ const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const metadataUserIdHelper = require('../../utils/metadataUserIdHelper')
 const { sanitizeSystemText } = require('../claudeCloakingUtils')
 const {
+  buildBillingHeaderValue,
+  extractClaudeCodeVersionFromUserAgent,
+  CLAUDE_CODE_ENTRYPOINT
+} = require('../../utils/cchHelper')
+const {
   getHttpsAgentForStream,
   getHttpsAgentForNonStream,
   getPricingData
@@ -162,6 +167,82 @@ class ClaudeRelayService {
   _isClaudeCodeUserAgent(clientHeaders) {
     const userAgent = clientHeaders?.['user-agent'] || clientHeaders?.['User-Agent']
     return typeof userAgent === 'string' && /^claude-cli\/[^\s]+\s+\(/i.test(userAgent)
+  }
+
+  _getServerBillingHeaderConfig() {
+    const billingConfig = config.claude?.serverBillingHeader || {}
+    return {
+      enabled:
+        billingConfig.enabled === true ||
+        process.env.ENABLE_SERVER_BILLING_HEADER === '1' ||
+        process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED === '1',
+      versionOverride:
+        billingConfig.versionOverride || process.env.CLAUDE_CODE_VERSION_OVERRIDE || null,
+      entrypoint:
+        billingConfig.entrypoint || process.env.CLAUDE_CODE_ENTRYPOINT || CLAUDE_CODE_ENTRYPOINT
+    }
+  }
+
+  _normalizeSystemForBillingHeader(system) {
+    if (Array.isArray(system)) {
+      return system
+    }
+    if (typeof system === 'string') {
+      const trimmed = system.trim()
+      return trimmed ? [{ type: 'text', text: trimmed }] : []
+    }
+    if (system && typeof system === 'object') {
+      return [system]
+    }
+    return null
+  }
+
+  _injectServerBillingHeader(requestPayload, outgoingUserAgent) {
+    const billingConfig = this._getServerBillingHeaderConfig()
+    if (!billingConfig.enabled) {
+      return false
+    }
+    if (!requestPayload || !Array.isArray(requestPayload.messages)) {
+      return false
+    }
+    if (!requestPayload.messages.some((message) => message && message.role === 'user')) {
+      return false
+    }
+
+    const version =
+      typeof billingConfig.versionOverride === 'string' && billingConfig.versionOverride.trim()
+        ? billingConfig.versionOverride.trim()
+        : extractClaudeCodeVersionFromUserAgent(outgoingUserAgent)
+
+    if (!version) {
+      logger.debug(
+        `🧾 Skipping server billing header injection: cannot derive Claude Code version from outgoing UA: ${outgoingUserAgent || 'n/a'}`
+      )
+      return false
+    }
+
+    // Defensive second pass: _processRequestBody already strips client-supplied
+    // billing headers, but identity transforms could theoretically re-add one.
+    this._removeBillingHeaderFromSystem(requestPayload)
+
+    const systemBlocks = this._normalizeSystemForBillingHeader(requestPayload.system)
+    if (!systemBlocks || systemBlocks.length === 0) {
+      logger.debug('🧾 Skipping server billing header injection: request has no system block')
+      return false
+    }
+
+    const billingHeader = buildBillingHeaderValue(
+      requestPayload.messages,
+      version,
+      billingConfig.entrypoint
+    )
+    if (!billingHeader) {
+      return false
+    }
+
+    requestPayload.system = [{ type: 'text', text: billingHeader }, ...systemBlocks]
+    logger.debug(`🧾 Injected server billing header using Claude Code version ${version}`)
+    return true
   }
 
   _isActualClaudeCodeRequest(requestBody, clientHeaders) {
@@ -1700,10 +1781,6 @@ class ClaudeRelayService {
       })
     }
 
-    // 序列化请求体，计算 content-length
-    const bodyString = JSON.stringify(requestPayload)
-    const contentLength = Buffer.byteLength(bodyString, 'utf8')
-
     // 构建最终请求头（包含认证、版本、User-Agent、Beta 等）
     // Force identity encoding to prevent upstream (Cloudflare) from returning
     // gzip-compressed responses without a Content-Encoding header, which causes
@@ -1713,7 +1790,6 @@ class ClaudeRelayService {
       host: 'api.anthropic.com',
       connection: 'keep-alive',
       'content-type': 'application/json',
-      'content-length': String(contentLength),
       'accept-encoding': 'identity',
       authorization: `Bearer ${accessToken}`,
       'anthropic-version': this.apiVersion,
@@ -1724,8 +1800,18 @@ class ClaudeRelayService {
     // 必须在 spread 后覆盖回 identity，因为 https.request 的手动解压只支持 gzip/deflate
     headers['accept-encoding'] = 'identity'
 
+    const headerUserAgent = this._getHeaderValueCaseInsensitive(headers, 'user-agent')
+    const clientClaudeCodeUserAgent = this._isClaudeCodeUserAgent(clientHeaders)
+      ? this._getHeaderValueCaseInsensitive(clientHeaders, 'user-agent')
+      : null
+    const defaultClaudeCodeUserAgent = claudeCodeHeadersService.defaultHeaders?.['user-agent']
+    const accountClaudeCodeUserAgent =
+      headerUserAgent && headerUserAgent !== defaultClaudeCodeUserAgent ? headerUserAgent : null
+    const dynamicBillingUserAgent =
+      unifiedUA || clientClaudeCodeUserAgent || accountClaudeCodeUserAgent
+
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
-    const userAgent = unifiedUA || headers['user-agent'] || 'claude-cli/1.0.119 (external, cli)'
+    const userAgent = unifiedUA || headerUserAgent || 'claude-cli/1.0.119 (external, cli)'
     const acceptHeader = headers['accept'] || 'application/json'
     delete headers['user-agent']
     delete headers['accept']
@@ -1733,6 +1819,17 @@ class ClaudeRelayService {
     headers['Accept'] = acceptHeader
 
     logger.debug(`🔗 Request User-Agent: ${headers['User-Agent']}`)
+
+    // Upstream opencode-anthropic-auth prepends a CCH billing header to
+    // system[0]. We do the same only when we have a dynamic Claude Code UA
+    // source (client, cached unified UA, or stored account headers), so
+    // cc_version does not silently follow a hardcoded fallback UA.
+    this._injectServerBillingHeader(requestPayload, dynamicBillingUserAgent)
+
+    // 序列化请求体，计算 content-length（必须在 billing header 注入后）
+    const bodyString = JSON.stringify(requestPayload)
+    const contentLength = Buffer.byteLength(bodyString, 'utf8')
+    headers['content-length'] = String(contentLength)
 
     // 根据模型和客户端传递的 anthropic-beta 动态设置 header
     const modelId = requestPayload?.model || body?.model
