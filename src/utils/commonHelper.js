@@ -231,6 +231,28 @@ const sortAccountsByPriority = (accounts) =>
     return createdA - createdB
   })
 
+// 获取账户调度权重（priority 越小权重越大）
+const getAccountWeight = (account) => 101 - clamp(safeParseInt(account?.priority, 50), 1, 100)
+
+// 按权重比例随机选择账户
+const selectAccountByWeight = (accounts) => {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null
+  }
+
+  const weights = accounts.map(getAccountWeight)
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0)
+  let r = Math.random() * totalWeight
+
+  for (let i = 0; i < accounts.length; i++) {
+    r -= weights[i]
+    if (r < 0) {
+      return accounts[i]
+    }
+  }
+  return accounts[accounts.length - 1]
+}
+
 // 生成粘性会话 Key
 const composeStickySessionKey = (prefix, sessionHash, apiKeyId = null) => {
   if (!sessionHash) {
@@ -387,6 +409,7 @@ module.exports = {
   getMappedModelName,
   // 调度
   sortAccountsByPriority,
+  selectAccountByWeight,
   composeStickySessionKey,
   filterAvailableAccounts,
   // 字符串

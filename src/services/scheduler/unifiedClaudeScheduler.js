@@ -10,7 +10,7 @@ const {
   isOpus45OrNewer,
   getRateLimitModelFamily
 } = require('../../utils/modelHelper')
-const { isSchedulable, sortAccountsByPriority } = require('../../utils/commonHelper')
+const { isSchedulable, selectAccountByWeight } = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const config = require('../../../config/config')
 
@@ -479,11 +479,7 @@ class UnifiedClaudeScheduler {
         }
       }
 
-      // 按优先级和最后使用时间排序
-      const sortedAccounts = sortAccountsByPriority(availableAccounts)
-
-      // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount = selectAccountByWeight(availableAccounts)
 
       // 如果有会话哈希，建立新的映射
       if (sessionHash) {
@@ -1687,11 +1683,7 @@ class UnifiedClaudeScheduler {
         throw new Error(`No available accounts in group ${group.name}`)
       }
 
-      // 使用现有的优先级排序逻辑
-      const sortedAccounts = sortAccountsByPriority(availableAccounts)
-
-      // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount = selectAccountByWeight(availableAccounts)
 
       // 如果有会话哈希，建立新的映射
       if (sessionHash) {
@@ -1757,9 +1749,8 @@ class UnifiedClaudeScheduler {
         )
       }
 
-      // 3. 按优先级和最后使用时间排序
-      const sortedAccounts = sortAccountsByPriority(availableCcrAccounts)
-      const selectedAccount = sortedAccounts[0]
+      // 3. 选择CCR账户
+      const selectedAccount = selectAccountByWeight(availableCcrAccounts)
 
       // 4. 建立会话映射
       if (sessionHash) {
