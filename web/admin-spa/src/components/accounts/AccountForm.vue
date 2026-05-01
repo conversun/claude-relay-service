@@ -1984,18 +1984,18 @@
             <!-- 所有平台的优先级设置 -->
             <div>
               <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
-                >调度优先级 (1-100)</label
+                >调度权重 (1-100)</label
               >
               <input
                 v-model.number="form.priority"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
                 max="100"
                 min="1"
-                placeholder="数字越小优先级越高，默认50"
+                placeholder="数字越小，权重越高，默认50"
                 type="number"
               />
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                数字越小优先级越高，建议范围：1-100
+                Claude 账号按权重随机分配；其他平台仍按优先级。建议 1-100
               </p>
             </div>
 
@@ -3007,18 +3007,18 @@
           <!-- 所有平台的优先级设置（编辑模式） -->
           <div>
             <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
-              >调度优先级 (1-100)</label
+              >调度权重 (1-100)</label
             >
             <input
               v-model.number="form.priority"
               class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
               max="100"
               min="1"
-              placeholder="数字越小优先级越高"
+              placeholder="数字越小，权重越高"
               type="number"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              数字越小优先级越高，建议范围：1-100
+              Claude 账号按权重随机分配；其他平台仍按优先级。建议 1-100
             </p>
           </div>
 
