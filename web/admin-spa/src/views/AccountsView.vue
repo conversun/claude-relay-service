@@ -435,7 +435,7 @@
                   class="min-w-[80px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                   @click="sortAccounts('priority')"
                 >
-                  优先级
+                  权重
                   <i
                     v-if="accountsSortBy === 'priority'"
                     :class="[
@@ -1242,7 +1242,7 @@
                     <div class="h-2 w-16 rounded-full bg-gray-200">
                       <div
                         class="h-2 rounded-full bg-gradient-to-r from-green-500 to-blue-600 transition-all duration-300"
-                        :style="{ width: 101 - (account.priority || 50) + '%' }"
+                        :style="{ width: (account.priority || 50) + '%' }"
                       />
                     </div>
                     <span class="min-w-[20px] text-xs font-medium text-gray-700 dark:text-gray-200">
@@ -1834,9 +1834,9 @@
               </span>
             </div>
 
-            <!-- 调度优先级 -->
+            <!-- 调度权重 -->
             <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500 dark:text-gray-400">优先级</span>
+              <span class="text-gray-500 dark:text-gray-400">权重</span>
               <span class="font-medium text-gray-700 dark:text-gray-200">
                 {{ account.priority || 50 }}
               </span>
