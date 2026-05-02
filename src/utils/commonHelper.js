@@ -231,8 +231,8 @@ const sortAccountsByPriority = (accounts) =>
     return createdA - createdB
   })
 
-// 获取账户调度权重（priority 越小权重越大）
-const getAccountWeight = (account) => 101 - clamp(safeParseInt(account?.priority, 50), 1, 100)
+// 获取账户调度权重（priority 越大权重越大）
+const getAccountWeight = (account) => clamp(safeParseInt(account?.priority, 50), 1, 100)
 
 // 按权重比例随机选择账户
 const selectAccountByWeight = (accounts) => {
