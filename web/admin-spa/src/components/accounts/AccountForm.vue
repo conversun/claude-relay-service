@@ -1991,11 +1991,11 @@
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
                 max="100"
                 min="1"
-                placeholder="数字越小，权重越高，默认50"
+                placeholder="数字越大，权重越高，默认50"
                 type="number"
               />
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Claude 账号按权重随机分配；其他平台仍按优先级。建议 1-100
+                Claude 账号按权重随机分配，数字越大流量越多；其他平台仍按优先级。建议 1-100
               </p>
             </div>
 
@@ -3014,11 +3014,11 @@
               class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
               max="100"
               min="1"
-              placeholder="数字越小，权重越高"
+              placeholder="数字越大，权重越高"
               type="number"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Claude 账号按权重随机分配；其他平台仍按优先级。建议 1-100
+              Claude 账号按权重随机分配，数字越大流量越多；其他平台仍按优先级。建议 1-100
             </p>
           </div>
 
