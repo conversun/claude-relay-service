@@ -49,6 +49,30 @@
         }}</span>
       </div>
     </div>
+    <!-- 缓存命中率：把 input/cacheRead/cacheCreate 浓缩成成本视角 -->
+    <div class="mt-3 border-t border-gray-200 pt-3 dark:border-gray-700 md:mt-4 md:pt-4">
+      <div class="flex items-center justify-between">
+        <span class="flex items-center text-sm text-gray-600 dark:text-gray-400 md:text-base">
+          <i class="fas fa-bullseye mr-1 text-xs text-pink-500 md:mr-2 md:text-sm" />
+          缓存命中率
+        </span>
+        <span
+          class="text-sm font-bold md:text-base"
+          :class="
+            cacheHitRateInfo.hasData
+              ? cacheHitRateColorClass(cacheHitRateInfo.rate)
+              : 'text-gray-400 dark:text-gray-500'
+          "
+          :title="
+            cacheHitRateInfo.hasData
+              ? `cacheRead / (input + cacheRead + cacheCreate) = ${formatNumber(currentPeriodData.cacheReadTokens)} / ${formatNumber(currentPeriodData.inputTokens + currentPeriodData.cacheReadTokens + currentPeriodData.cacheCreateTokens)}`
+              : '当前周期暂无使用数据'
+          "
+        >
+          {{ cacheHitRateInfo.hasData ? `${cacheHitRateInfo.rate.toFixed(2)}%` : '—' }}
+        </span>
+      </div>
+    </div>
     <div class="mt-3 border-t border-gray-200 pt-3 dark:border-gray-700 md:mt-4 md:pt-4">
       <div class="flex items-center justify-between font-bold text-gray-900 dark:text-gray-100">
         <span class="text-sm md:text-base"
@@ -62,11 +86,12 @@
 
 <script setup>
 import { formatNumber } from '@/utils/tools'
+import { cacheHitRateColorClass } from '@/utils/cacheMetrics'
 import { storeToRefs } from 'pinia'
 import { useApiStatsStore } from '@/stores/apistats'
 
 const apiStatsStore = useApiStatsStore()
-const { statsPeriod, currentPeriodData } = storeToRefs(apiStatsStore)
+const { statsPeriod, currentPeriodData, cacheHitRateInfo } = storeToRefs(apiStatsStore)
 
 // 格式化数字
 </script>

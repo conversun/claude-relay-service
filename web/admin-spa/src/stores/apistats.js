@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 import * as httpApis from '@/utils/http_apis'
+import { calculateAggregateCacheHitRate } from '@/utils/cacheMetrics'
 
 export const useApiStatsStore = defineStore('apistats', () => {
   // 状态
@@ -96,6 +97,11 @@ export const useApiStatsStore = defineStore('apistats', () => {
           ? Math.min((current.requests / limits.rateLimitRequests) * 100, 100)
           : 0
     }
+  })
+
+  // 缓存命中率（聚合）：基于 currentPeriodData 计算
+  const cacheHitRateInfo = computed(() => {
+    return calculateAggregateCacheHitRate(currentPeriodData.value)
   })
 
   // Actions
@@ -604,6 +610,7 @@ export const useApiStatsStore = defineStore('apistats', () => {
     // Computed
     currentPeriodData,
     usagePercentages,
+    cacheHitRateInfo,
 
     // Actions
     queryStats,
