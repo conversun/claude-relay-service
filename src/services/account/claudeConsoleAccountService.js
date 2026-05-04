@@ -60,7 +60,7 @@ class ClaudeConsoleAccountService {
       apiKey = '',
       priority = 50, // 默认优先级50（1-100）
       supportedModels = [], // 支持的模型列表或映射表，空数组/对象表示支持所有
-      userAgent = 'claude-cli/1.0.69 (external, cli)',
+      userAgent = 'claude-cli/2.1.114 (external, cli)',
       rateLimitDuration = 60, // 限流时间（分钟）
       proxy = null,
       isActive = true,

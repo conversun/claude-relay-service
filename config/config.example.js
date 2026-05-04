@@ -48,11 +48,13 @@ const config = {
       process.env.CLAUDE_BETA_HEADER ||
       'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
     serverBillingHeader: {
-      // 默认关闭。开启后服务端会剥离客户端传入的 x-anthropic-billing-header，
+      // 默认开启。开启后服务端会剥离客户端传入的 x-anthropic-billing-header，
       // 再按当前出站 Claude Code User-Agent 动态计算并注入一份新的 header。
+      // 真实 Claude Code 始终发送此 header，关闭会让请求暴露为第三方。
+      // 设置 ENABLE_SERVER_BILLING_HEADER=0 可显式禁用。
       enabled:
-        process.env.ENABLE_SERVER_BILLING_HEADER === '1' ||
-        process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED === '1',
+        process.env.ENABLE_SERVER_BILLING_HEADER !== '0' &&
+        process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED !== '0',
       // 可选人工覆盖；默认从最终出站 User-Agent（claude-cli/<version>）解析，避免硬编码版本。
       versionOverride: process.env.CLAUDE_CODE_VERSION_OVERRIDE || '',
       entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-cli'

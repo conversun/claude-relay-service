@@ -172,9 +172,9 @@ class ClaudeRelayService {
     const billingConfig = config.claude?.serverBillingHeader || {}
     return {
       enabled:
-        billingConfig.enabled === true ||
-        process.env.ENABLE_SERVER_BILLING_HEADER === '1' ||
-        process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED === '1',
+        billingConfig.enabled !== false &&
+        process.env.ENABLE_SERVER_BILLING_HEADER !== '0' &&
+        process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED !== '0',
       versionOverride:
         billingConfig.versionOverride || process.env.CLAUDE_CODE_VERSION_OVERRIDE || null,
       entrypoint:
@@ -1723,7 +1723,7 @@ class ClaudeRelayService {
       unifiedUA || clientClaudeCodeUserAgent || accountClaudeCodeUserAgent
 
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
-    const userAgent = unifiedUA || headerUserAgent || 'claude-cli/1.0.119 (external, cli)'
+    const userAgent = unifiedUA || headerUserAgent || 'claude-cli/2.1.114 (external, cli)'
     const acceptHeader = headers['accept'] || 'application/json'
     delete headers['user-agent']
     delete headers['accept']

@@ -38,7 +38,9 @@ const { createHash } = require('crypto')
 const CCH_SALT = '59cf53e54c78'
 const CCH_POSITIONS = [4, 7, 20]
 // Reference only. Do NOT use as a live default; parse the outgoing UA instead.
-const CLAUDE_CODE_VERSION = '2.1.87'
+// Bumped to 2.1.114 to track current Claude Code release. Drift checker will
+// flag if upstream opencode-anthropic-auth ships a different value.
+const CLAUDE_CODE_VERSION = '2.1.114'
 const CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
 
 function isNonEmptyString(value) {
@@ -49,7 +51,7 @@ function isNonEmptyString(value) {
  * Extract Claude Code version from a Claude Code User-Agent.
  *
  * Examples:
- *   claude-cli/2.1.87 (external, cli)      → 2.1.87
+ *   claude-cli/2.1.114 (external, cli)     → 2.1.114
  *   claude-cli/2.1.0-beta.1 (external, cli) → 2.1.0-beta.1
  *
  * @param {string} userAgent
