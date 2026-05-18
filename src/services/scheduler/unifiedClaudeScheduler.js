@@ -13,7 +13,8 @@ const {
 const {
   isSchedulable,
   selectAccountByWeight,
-  selectAccountByWeightWithResetBias
+  selectAccountByWeightWithResetBias,
+  applyResetWindow
 } = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const config = require('../../../config/config')
@@ -482,6 +483,25 @@ class UnifiedClaudeScheduler {
           throw new Error('No available Claude accounts (neither official nor console)')
         }
       }
+
+      // 🪟 注入真实重置时间(windowEnd)：sessionWindowEnd 仅在 429 时写入主 hash，
+      // 健康账户为空会使 reset 偏置退化为均匀。此处用 getSessionWindowInfo 取真实窗口，
+      // 仅 Layer-2 重选路径触发（sticky 命中不经过此处），批量并发，开销可控。
+      await Promise.all(
+        availableAccounts.map(async (acc) => {
+          if (acc.accountType !== 'claude-official') {
+            return
+          }
+          try {
+            const sw = await claudeAccountService.getSessionWindowInfo(acc.accountId)
+            applyResetWindow(acc, sw)
+          } catch (e) {
+            logger.debug(
+              `reset-bias: sessionWindow fetch failed for ${acc.accountId}: ${e.message}`
+            )
+          }
+        })
+      )
 
       const selectedAccount = selectAccountByWeightWithResetBias(availableAccounts)
 
