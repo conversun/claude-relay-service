@@ -295,6 +295,15 @@ const selectAccountByWeightWithResetBias = (accounts) => {
   return accounts[accounts.length - 1]
 }
 
+// 用会话窗口信息(getSessionWindowInfo 返回的 windowEnd)富化账户的 sessionWindowEnd，
+// 使 reset 偏置对未被 429 的健康账户也生效。纯函数，便于单测；空/无 windowEnd 时不改动。
+const applyResetWindow = (account, sessionWindowInfo) => {
+  if (account && sessionWindowInfo && sessionWindowInfo.windowEnd) {
+    account.sessionWindowEnd = sessionWindowInfo.windowEnd
+  }
+  return account
+}
+
 // 生成粘性会话 Key
 const composeStickySessionKey = (prefix, sessionHash, apiKeyId = null) => {
   if (!sessionHash) {
@@ -453,6 +462,7 @@ module.exports = {
   sortAccountsByPriority,
   selectAccountByWeight,
   selectAccountByWeightWithResetBias,
+  applyResetWindow,
   composeStickySessionKey,
   filterAvailableAccounts,
   // 字符串

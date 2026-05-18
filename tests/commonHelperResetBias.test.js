@@ -12,7 +12,8 @@ jest.mock(
 
 const {
   selectAccountByWeightWithResetBias,
-  selectAccountByWeight
+  selectAccountByWeight,
+  applyResetWindow
 } = require('../src/utils/commonHelper')
 
 // 构造相对当前时间的 ISO 时间串（小时偏移）
@@ -156,6 +157,51 @@ describe('selectAccountByWeightWithResetBias - 字段健壮性', () => {
       { accountId: 'A', priority: 10, rateLimitEndAt: hoursFromNow(2) },
       { accountId: 'B', priority: 10 }
     ]
+    jest.spyOn(Math, 'random').mockReturnValue(0.79)
+    expect(selectAccountByWeightWithResetBias(accounts).accountId).toBe('A')
+    jest.spyOn(Math, 'random').mockReturnValue(0.81)
+    expect(selectAccountByWeightWithResetBias(accounts).accountId).toBe('B')
+  })
+})
+
+describe('applyResetWindow - 用会话窗口信息富化 sessionWindowEnd', () => {
+  test('windowEnd 存在时写入 account.sessionWindowEnd 并返回该 account', () => {
+    const acc = { accountId: 'A', priority: 50 }
+    const end = hoursFromNow(2)
+    const out = applyResetWindow(acc, { hasActiveWindow: true, windowEnd: end })
+    expect(out).toBe(acc)
+    expect(acc.sessionWindowEnd).toBe(end)
+  })
+
+  test('sessionWindowInfo 为 null 时不改动 account', () => {
+    const acc = { accountId: 'A', priority: 50 }
+    applyResetWindow(acc, null)
+    expect(acc.sessionWindowEnd).toBeUndefined()
+  })
+
+  test('sessionWindowInfo 无 windowEnd 时不改动 account', () => {
+    const acc = { accountId: 'A', priority: 50 }
+    applyResetWindow(acc, { hasActiveWindow: false, windowEnd: null })
+    expect(acc.sessionWindowEnd).toBeUndefined()
+  })
+
+  test('account 为 null 时安全返回，不抛异常', () => {
+    expect(() => applyResetWindow(null, { windowEnd: hoursFromNow(1) })).not.toThrow()
+    expect(applyResetWindow(null, { windowEnd: hoursFromNow(1) })).toBeNull()
+  })
+
+  test('富化后近重置账户在加权选择中显著占优（端到端）', () => {
+    // 模拟 getSessionWindowInfo().windowEnd：A 2h后重置(factor4) B 100h后(factor1)
+    const a = applyResetWindow(
+      { accountId: 'A', priority: 50 },
+      { hasActiveWindow: true, windowEnd: hoursFromNow(2) }
+    )
+    const b = applyResetWindow(
+      { accountId: 'B', priority: 50 },
+      { hasActiveWindow: true, windowEnd: hoursFromNow(100) }
+    )
+    const accounts = [a, b]
+    // weights 200/50，A 区间[0,200) → random<0.8 选 A
     jest.spyOn(Math, 'random').mockReturnValue(0.79)
     expect(selectAccountByWeightWithResetBias(accounts).accountId).toBe('A')
     jest.spyOn(Math, 'random').mockReturnValue(0.81)
