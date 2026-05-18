@@ -10,7 +10,11 @@ const {
   isOpus45OrNewer,
   getRateLimitModelFamily
 } = require('../../utils/modelHelper')
-const { isSchedulable, selectAccountByWeight } = require('../../utils/commonHelper')
+const {
+  isSchedulable,
+  selectAccountByWeight,
+  selectAccountByWeightWithResetBias
+} = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const config = require('../../../config/config')
 
@@ -479,7 +483,7 @@ class UnifiedClaudeScheduler {
         }
       }
 
-      const selectedAccount = selectAccountByWeight(availableAccounts)
+      const selectedAccount = selectAccountByWeightWithResetBias(availableAccounts)
 
       // 如果有会话哈希，建立新的映射
       if (sessionHash) {
