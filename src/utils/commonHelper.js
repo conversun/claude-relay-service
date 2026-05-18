@@ -253,6 +253,48 @@ const selectAccountByWeight = (accounts) => {
   return accounts[accounts.length - 1]
 }
 
+// 计算账户「重置临近度」偏置因子：越临近重置，因子越大（消费即将作废的额度）
+// 缺失/无法解析重置信息时返回 1（退化为纯优先级权重，向后兼容）
+// horizonHours 为参考视野，maxBias 限制最大偏置，避免单账户被打爆雪崩
+const getResetBiasFactor = (account, horizonHours = 24, maxBias = 4) => {
+  const raw = account?.sessionWindowEnd || account?.rateLimitEndAt
+  if (!raw) {
+    return 1
+  }
+  const resetMs = Date.parse(raw)
+  if (Number.isNaN(resetMs)) {
+    return 1
+  }
+  const remainingHours = (resetMs - Date.now()) / 3600000
+  if (remainingHours <= 0) {
+    return maxBias
+  }
+  return clamp(horizonHours / remainingHours, 1, maxBias)
+}
+
+// 分层调度第 2 层：按 优先级权重 × 重置临近度反比 加权随机选择
+// 临近重置账户获得更高权重，但有上限，仍保持分散；无重置信息时等价于 selectAccountByWeight
+const selectAccountByWeightWithResetBias = (accounts) => {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null
+  }
+
+  const weights = accounts.map((acc) => getAccountWeight(acc) * getResetBiasFactor(acc))
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0)
+  if (totalWeight <= 0) {
+    return selectAccountByWeight(accounts)
+  }
+  let r = Math.random() * totalWeight
+
+  for (let i = 0; i < accounts.length; i++) {
+    r -= weights[i]
+    if (r < 0) {
+      return accounts[i]
+    }
+  }
+  return accounts[accounts.length - 1]
+}
+
 // 生成粘性会话 Key
 const composeStickySessionKey = (prefix, sessionHash, apiKeyId = null) => {
   if (!sessionHash) {
@@ -410,6 +452,7 @@ module.exports = {
   // 调度
   sortAccountsByPriority,
   selectAccountByWeight,
+  selectAccountByWeightWithResetBias,
   composeStickySessionKey,
   filterAvailableAccounts,
   // 字符串
