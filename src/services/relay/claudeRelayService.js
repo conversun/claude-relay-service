@@ -31,6 +31,14 @@ const {
   getPricingData
 } = require('../../utils/performanceOptimizer')
 
+const CLAUDE_CODE_USER_AGENT_CACHE_KEY = 'claude_code_user_agent:daily'
+const CLAUDE_CODE_VERIFIED_CACHE_KEY = 'claude_code_user_agent:verified'
+const CLAUDE_CODE_PUBLISHED_VERSIONS_CACHE_KEY = 'claude_code_user_agent:published_versions'
+const CLAUDE_CODE_PUBLISHED_VERSIONS_TTL_SECONDS = 3600
+const CLAUDE_CODE_VERSION_RETRY_DELAY_MS = 5 * 60 * 1000
+const CLAUDE_CODE_VERSION_PATTERN = /^\d{1,4}(?:\.\d{1,4}){1,3}$/
+const CLAUDE_CODE_UA_PATTERN = /^claude-cli\/(\d{1,4}(?:\.\d{1,4}){1,3}) \(external, cli\)$/i
+
 // structuredClone polyfill for Node < 17
 const safeClone =
   typeof structuredClone === 'function' ? structuredClone : (obj) => JSON.parse(JSON.stringify(obj))
@@ -48,6 +56,10 @@ class ClaudeRelayService {
     this.toolNameSuffix = null
     this.toolNameSuffixGeneratedAt = 0
     this.toolNameSuffixTtlMs = 60 * 60 * 1000
+    this._claudeCodeVersionRefreshPromise = null
+    this._pendingClaudeCodeUserAgent = null
+    this._claudeCodeVersionRetryAfter = 0
+    this._claudeCodeVersionRetryTimer = null
   }
 
   // 🔧 根据模型ID和客户端传递的 anthropic-beta 获取最终的 header
@@ -3432,38 +3444,195 @@ class ClaudeRelayService {
       return null
     }
 
-    const CACHE_KEY = 'claude_code_user_agent:daily'
-    const TTL = 90000 // 25小时
-
     // ⚠️ 重要：这里通过正则表达式判断是否为 Claude Code 客户端
     // 如果未来 Claude Code 的 User-Agent 格式发生变化，需要更新这个正则表达式
     // 当前已知格式：claude-cli/1.0.102 (external, cli)
-    const CLAUDE_CODE_UA_PATTERN = /^claude-cli\/[\d.]+\s+\(/i
-
     const clientUA = clientHeaders?.['user-agent'] || clientHeaders?.['User-Agent']
-    let cachedUA = await redis.client.get(CACHE_KEY)
+    const clientVersionMatch = clientUA?.match(CLAUDE_CODE_UA_PATTERN)
+    let cachedUA = await redis.client.get(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
+    const cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
+    let publishedVersions = null
+    let cacheWasWritten = false
 
-    if (clientUA && CLAUDE_CODE_UA_PATTERN.test(clientUA)) {
-      if (!cachedUA) {
-        // 没有缓存，直接存储
-        await redis.client.setex(CACHE_KEY, TTL, clientUA)
-        logger.info(`📱 Captured unified Claude Code User-Agent: ${clientUA}`)
-        cachedUA = clientUA
-      } else {
-        // 有缓存，比较版本号，保存更新的版本
-        const shouldUpdate = this.compareClaudeCodeVersions(clientUA, cachedUA)
-        if (shouldUpdate) {
-          await redis.client.setex(CACHE_KEY, TTL, clientUA)
-          logger.info(`🔄 Updated to newer Claude Code User-Agent: ${clientUA} (was: ${cachedUA})`)
-          cachedUA = clientUA
+    if (cachedUA && !cachedVersionMatch) {
+      await redis.client.del(CLAUDE_CODE_USER_AGENT_CACHE_KEY, CLAUDE_CODE_VERIFIED_CACHE_KEY)
+      logger.warn('⚠️ Removed invalid unified Claude Code User-Agent cache')
+      cachedUA = null
+    } else if (cachedUA) {
+      const verifiedUA = await redis.client.get(CLAUDE_CODE_VERIFIED_CACHE_KEY)
+      if (verifiedUA !== cachedUA) {
+        publishedVersions = await this._getCachedPublishedClaudeCodeVersions()
+        if (!publishedVersions) {
+          await redis.client.persist(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
+          this._scheduleOfficialClaudeCodeVersionRefresh(clientVersionMatch?.[0] ? clientUA : null)
+          return cachedUA
+        }
+
+        if (publishedVersions.has(cachedVersionMatch[1])) {
+          await redis.client.set(CLAUDE_CODE_VERIFIED_CACHE_KEY, cachedUA)
         } else {
-          // 当前版本不比缓存版本新，仅刷新TTL
-          await redis.client.expire(CACHE_KEY, TTL)
+          await redis.client.del(CLAUDE_CODE_USER_AGENT_CACHE_KEY, CLAUDE_CODE_VERIFIED_CACHE_KEY)
+          logger.warn('⚠️ Removed unpublished unified Claude Code User-Agent cache')
+          cachedUA = null
         }
       }
     }
 
+    if (clientVersionMatch) {
+      const shouldUpdate = !cachedUA || this.compareClaudeCodeVersions(clientUA, cachedUA)
+      if (shouldUpdate) {
+        publishedVersions =
+          publishedVersions || (await this._getCachedPublishedClaudeCodeVersions())
+        if (!publishedVersions) {
+          this._scheduleOfficialClaudeCodeVersionRefresh(clientUA)
+          return cachedUA
+        }
+
+        if (publishedVersions.has(clientVersionMatch[1])) {
+          await redis.client.mset(
+            CLAUDE_CODE_USER_AGENT_CACHE_KEY,
+            clientUA,
+            CLAUDE_CODE_VERIFIED_CACHE_KEY,
+            clientUA
+          )
+          if (cachedUA) {
+            logger.info(
+              `🔄 Updated to newer Claude Code User-Agent: ${clientUA} (was: ${cachedUA})`
+            )
+          } else {
+            logger.info(`📱 Captured unified Claude Code User-Agent: ${clientUA}`)
+          }
+          cachedUA = clientUA
+          cacheWasWritten = true
+        } else {
+          logger.warn(`⚠️ Ignored unpublished Claude Code version: ${clientVersionMatch[1]}`)
+        }
+      }
+    }
+
+    if (cachedUA && !cacheWasWritten) {
+      await redis.client.persist(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
+    }
+
     return cachedUA // 没有缓存返回 null
+  }
+
+  async _getCachedPublishedClaudeCodeVersions() {
+    const serializedVersions = await redis.client.get(CLAUDE_CODE_PUBLISHED_VERSIONS_CACHE_KEY)
+    if (!serializedVersions) {
+      return null
+    }
+
+    try {
+      const versions = JSON.parse(serializedVersions)
+      if (
+        !Array.isArray(versions) ||
+        versions.length === 0 ||
+        versions.some((version) => !CLAUDE_CODE_VERSION_PATTERN.test(version))
+      ) {
+        throw new Error('invalid published version cache')
+      }
+      return new Set(versions)
+    } catch (error) {
+      await redis.client.del(CLAUDE_CODE_PUBLISHED_VERSIONS_CACHE_KEY)
+      logger.warn(`⚠️ Removed invalid Claude Code published-version cache: ${error.message}`)
+      return null
+    }
+  }
+
+  _scheduleOfficialClaudeCodeVersionRefresh(clientUA) {
+    const clientVersionMatch = clientUA?.match(CLAUDE_CODE_UA_PATTERN)
+    if (clientVersionMatch && !this._pendingClaudeCodeUserAgent) {
+      this._pendingClaudeCodeUserAgent = clientUA
+    }
+
+    if (this._claudeCodeVersionRefreshPromise || Date.now() < this._claudeCodeVersionRetryAfter) {
+      return
+    }
+
+    if (this._claudeCodeVersionRetryTimer) {
+      clearTimeout(this._claudeCodeVersionRetryTimer)
+      this._claudeCodeVersionRetryTimer = null
+    }
+
+    const refreshPromise = this._fetchOfficialClaudeCodeVersions()
+      .then(async (publishedVersions) => {
+        if (!publishedVersions) {
+          this._claudeCodeVersionRetryAfter = Date.now() + CLAUDE_CODE_VERSION_RETRY_DELAY_MS
+          this._scheduleOfficialClaudeCodeVersionRetry()
+          return
+        }
+
+        await redis.client.set(
+          CLAUDE_CODE_PUBLISHED_VERSIONS_CACHE_KEY,
+          JSON.stringify(publishedVersions),
+          'EX',
+          CLAUDE_CODE_PUBLISHED_VERSIONS_TTL_SECONDS
+        )
+        this._claudeCodeVersionRetryAfter = 0
+
+        const pendingUA = this._pendingClaudeCodeUserAgent
+        this._pendingClaudeCodeUserAgent = null
+        await this.captureAndGetUnifiedUserAgent(pendingUA ? { 'user-agent': pendingUA } : {}, {
+          useUnifiedUserAgent: 'true'
+        })
+      })
+      .catch((error) => {
+        this._claudeCodeVersionRetryAfter = Date.now() + CLAUDE_CODE_VERSION_RETRY_DELAY_MS
+        this._scheduleOfficialClaudeCodeVersionRetry()
+        logger.warn(`⚠️ Failed to refresh official Claude Code version: ${error.message}`)
+      })
+      .finally(() => {
+        if (this._claudeCodeVersionRefreshPromise === refreshPromise) {
+          this._claudeCodeVersionRefreshPromise = null
+        }
+      })
+
+    this._claudeCodeVersionRefreshPromise = refreshPromise
+  }
+
+  _scheduleOfficialClaudeCodeVersionRetry() {
+    if (this._claudeCodeVersionRetryTimer) {
+      return
+    }
+
+    const delay = Math.max(0, this._claudeCodeVersionRetryAfter - Date.now())
+    this._claudeCodeVersionRetryTimer = setTimeout(() => {
+      this._claudeCodeVersionRetryTimer = null
+      this._claudeCodeVersionRetryAfter = 0
+      this._scheduleOfficialClaudeCodeVersionRefresh(this._pendingClaudeCodeUserAgent)
+    }, delay)
+    this._claudeCodeVersionRetryTimer.unref?.()
+  }
+
+  async _fetchOfficialClaudeCodeVersions() {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+
+    try {
+      const response = await fetch('https://registry.npmjs.org/@anthropic-ai%2fclaude-code', {
+        headers: {
+          Accept: 'application/vnd.npm.install-v1+json',
+          'User-Agent': 'claude-relay-service'
+        },
+        redirect: 'error',
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        return null
+      }
+
+      const packageMetadata = await response.json()
+      const versions = Object.keys(packageMetadata?.versions || {}).filter((version) =>
+        CLAUDE_CODE_VERSION_PATTERN.test(version)
+      )
+      return versions.length > 0 ? versions : null
+    } catch (error) {
+      logger.debug(`🔍 Official Claude Code version lookup unavailable: ${error.message}`)
+      return null
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   // 🔄 比较Claude Code版本号，判断是否需要更新

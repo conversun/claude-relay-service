@@ -388,9 +388,10 @@ router.get('/claude-code-version', authenticateAdmin, async (req, res) => {
 router.post('/claude-code-version/clear', authenticateAdmin, async (req, res) => {
   try {
     const CACHE_KEY = 'claude_code_user_agent:daily'
+    const VERIFIED_CACHE_KEY = 'claude_code_user_agent:verified'
 
     // 删除缓存的统一User-Agent
-    await redis.client.del(CACHE_KEY)
+    await redis.client.del(CACHE_KEY, VERIFIED_CACHE_KEY)
 
     logger.info(`🗑️ Admin manually cleared unified Claude Code User-Agent cache`)
 
