@@ -57,8 +57,6 @@ const config = {
       enabled:
         process.env.ENABLE_SERVER_BILLING_HEADER === '1' ||
         process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED === '1',
-      // 可选人工覆盖；默认从最终出站 User-Agent（claude-cli/<version>）解析，避免硬编码版本。
-      versionOverride: process.env.CLAUDE_CODE_VERSION_OVERRIDE || '',
       entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-cli'
     },
     overloadHandling: {

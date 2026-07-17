@@ -10,6 +10,59 @@ const {
   setCachedConfig,
   deleteCachedConfig
 } = require('../utils/performanceOptimizer')
+const { extractClaudeCodeVersionFromUserAgent } = require('../utils/cchHelper')
+
+const PUBLISHED_VERSIONS_KEY = 'claude_code_user_agent:published_versions'
+const VERSION_PATTERN = /^\d{1,4}(?:\.\d{1,4}){1,3}$/
+const STORE_HEADERS_SCRIPT = `
+local key = KEYS[1]
+local ttl = tonumber(ARGV[1])
+local candidateData = ARGV[2]
+local candidateSort = ARGV[3]
+
+local function getVersionSort(version)
+  if type(version) ~= 'string' then
+    return nil
+  end
+  local parts = {}
+  for component in string.gmatch(version, '[^%.]+') do
+    if not string.match(component, '^%d+$') then
+      return nil
+    end
+    local value = tonumber(component)
+    if not value or value > 9999 then
+      return nil
+    end
+    table.insert(parts, value)
+  end
+  if #parts < 2 or #parts > 4 then
+    return nil
+  end
+  return string.format('%04d.%04d.%04d.%04d', parts[1] or 0, parts[2] or 0, parts[3] or 0, parts[4] or 0)
+end
+
+local currentData = redis.call('GET', key)
+if currentData then
+  local ok, current = pcall(cjson.decode, currentData)
+  if ok and type(current) == 'table' then
+    local currentSort = current.versionSort or getVersionSort(current.version)
+    if currentSort and currentSort >= candidateSort then
+      return {0, currentData}
+    end
+  end
+end
+
+redis.call('SETEX', key, ttl, candidateData)
+return {1, candidateData}
+`
+const DELETE_HEADERS_IF_UNCHANGED_SCRIPT = `
+local key = KEYS[1]
+local expectedData = ARGV[1]
+if redis.call('GET', key) == expectedData then
+  return redis.call('DEL', key)
+end
+return 0
+`
 
 class ClaudeCodeHeadersService {
   constructor() {
@@ -55,38 +108,35 @@ class ClaudeCodeHeadersService {
    * 从 user-agent 中提取版本号
    */
   extractVersionFromUserAgent(userAgent) {
-    if (!userAgent) {
-      return null
-    }
-    const match = userAgent.match(/claude-cli\/([\d.]+(?:[a-zA-Z0-9-]*)?)/i)
-    return match ? match[1] : null
+    return extractClaudeCodeVersionFromUserAgent(userAgent)
   }
 
-  /**
-   * 比较版本号
-   * @returns {number} 1 if v1 > v2, -1 if v1 < v2, 0 if equal
-   */
-  compareVersions(v1, v2) {
-    if (!v1 || !v2) {
-      return 0
+  _getVersionSortKey(version) {
+    const parts = version.split('.').map((part) => Number.parseInt(part, 10))
+    while (parts.length < 4) {
+      parts.push(0)
     }
+    return parts.map((part) => String(part).padStart(4, '0')).join('.')
+  }
 
-    const parts1 = v1.split('.').map(Number)
-    const parts2 = v2.split('.').map(Number)
-
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-      const p1 = parts1[i] || 0
-      const p2 = parts2[i] || 0
-
-      if (p1 > p2) {
-        return 1
-      }
-      if (p1 < p2) {
-        return -1
-      }
+  async _getPublishedVersions(client) {
+    const serialized = await client.get(PUBLISHED_VERSIONS_KEY)
+    if (!serialized) {
+      return null
     }
-
-    return 0
+    try {
+      const versions = JSON.parse(serialized)
+      if (
+        !Array.isArray(versions) ||
+        versions.length === 0 ||
+        versions.some((version) => typeof version !== 'string' || !VERSION_PATTERN.test(version))
+      ) {
+        return null
+      }
+      return new Set(versions)
+    } catch (_error) {
+      return null
+    }
   }
 
   /**
@@ -119,46 +169,39 @@ class ClaudeCodeHeadersService {
     try {
       const extractedHeaders = this.extractClaudeCodeHeaders(clientHeaders)
 
-      // 检查是否有 user-agent
       const userAgent = extractedHeaders['user-agent']
-      if (!userAgent || !/^claude-cli\/[\d.]+\s+\(/i.test(userAgent)) {
-        // 不是 Claude Code 的请求，不存储
-        return
-      }
-
       const version = this.extractVersionFromUserAgent(userAgent)
       if (!version) {
-        logger.warn(`⚠️ Failed to extract version from user-agent: ${userAgent}`)
         return
       }
 
-      // 获取当前存储的 headers
-      const key = `claude_code_headers:${accountId}`
-      const currentData = await redis.getClient().get(key)
-
-      if (currentData) {
-        const current = JSON.parse(currentData)
-        const currentVersion = this.extractVersionFromUserAgent(current.headers['user-agent'])
-
-        // 只有新版本更高时才更新
-        if (this.compareVersions(version, currentVersion) <= 0) {
-          return
-        }
+      const client = redis.getClient()
+      const publishedVersions = await this._getPublishedVersions(client)
+      if (!publishedVersions?.has(version)) {
+        logger.warn(`⚠️ Ignored unverified Claude Code headers for account ${accountId}`)
+        return
       }
 
-      // 存储新的 headers
+      const key = `claude_code_headers:${accountId}`
       const data = {
         headers: extractedHeaders,
         version,
+        versionSort: this._getVersionSortKey(version),
         updatedAt: new Date().toISOString()
       }
+      const result = await client.eval(
+        STORE_HEADERS_SCRIPT,
+        1,
+        key,
+        86400 * 7,
+        JSON.stringify(data),
+        data.versionSort
+      )
+      deleteCachedConfig(key)
 
-      await redis.getClient().setex(key, 86400 * 7, JSON.stringify(data)) // 7天过期
-
-      // 更新内存缓存，避免延迟
-      setCachedConfig(key, extractedHeaders, this.headersCacheTtl)
-
-      logger.info(`✅ Stored Claude Code headers for account ${accountId}, version: ${version}`)
+      if (Number(result?.[0]) === 1) {
+        logger.info(`✅ Stored Claude Code headers for account ${accountId}, version: ${version}`)
+      }
     } catch (error) {
       logger.error(`❌ Failed to store Claude Code headers for account ${accountId}:`, error)
     }
@@ -173,7 +216,13 @@ class ClaudeCodeHeadersService {
     // 检查内存缓存
     const cached = getCachedConfig(cacheKey)
     if (cached) {
-      return cached
+      const version = this.extractVersionFromUserAgent(cached['user-agent'])
+      const publishedVersions = await this._getPublishedVersions(redis.getClient())
+      if (version && publishedVersions?.has(version)) {
+        return cached
+      }
+      deleteCachedConfig(cacheKey)
+      return this.defaultHeaders
     }
 
     try {
@@ -181,6 +230,15 @@ class ClaudeCodeHeadersService {
 
       if (data) {
         const parsed = JSON.parse(data)
+        const version = this.extractVersionFromUserAgent(parsed.headers?.['user-agent'])
+        const publishedVersions = await this._getPublishedVersions(redis.getClient())
+        if (!version || !publishedVersions?.has(version)) {
+          deleteCachedConfig(cacheKey)
+          if (publishedVersions) {
+            await redis.getClient().eval(DELETE_HEADERS_IF_UNCHANGED_SCRIPT, 1, cacheKey, data)
+          }
+          return this.defaultHeaders
+        }
         logger.debug(
           `📋 Retrieved Claude Code headers for account ${accountId}, version: ${parsed.version}`
         )

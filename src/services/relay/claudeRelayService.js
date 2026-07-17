@@ -34,10 +34,98 @@ const {
 const CLAUDE_CODE_USER_AGENT_CACHE_KEY = 'claude_code_user_agent:daily'
 const CLAUDE_CODE_VERIFIED_CACHE_KEY = 'claude_code_user_agent:verified'
 const CLAUDE_CODE_PUBLISHED_VERSIONS_CACHE_KEY = 'claude_code_user_agent:published_versions'
+const CLAUDE_CODE_GENERATION_CACHE_KEY = 'claude_code_user_agent:generation'
+const CLAUDE_CODE_VERSION_SORT_CACHE_KEY = 'claude_code_user_agent:version_sort'
 const CLAUDE_CODE_PUBLISHED_VERSIONS_TTL_SECONDS = 3600
 const CLAUDE_CODE_VERSION_RETRY_DELAY_MS = 5 * 60 * 1000
+const CLAUDE_CODE_PENDING_CANDIDATE_LIMIT = 64
+const CLAUDE_CODE_PENDING_GENERATION_LIMIT = 8
+const CLAUDE_CODE_FALLBACK_USER_AGENT = 'claude-cli/1.0.119 (external, cli)'
 const CLAUDE_CODE_VERSION_PATTERN = /^\d{1,4}(?:\.\d{1,4}){1,3}$/
 const CLAUDE_CODE_UA_PATTERN = /^claude-cli\/(\d{1,4}(?:\.\d{1,4}){1,3}) \(external, cli\)$/i
+const CLAUDE_CODE_CACHE_MUTATION_SCRIPT = `
+local cacheKey = KEYS[1]
+local verifiedKey = KEYS[2]
+local generationKey = KEYS[3]
+local versionSortKey = KEYS[4]
+local action = ARGV[1]
+local expectedGeneration = ARGV[2]
+local expectedUserAgent = ARGV[3]
+local candidateUserAgent = ARGV[4]
+local candidateSort = ARGV[5]
+
+local function getGeneration()
+  return redis.call('GET', generationKey) or '0'
+end
+
+local function getVersionSort(userAgent)
+  local version = string.match(string.lower(userAgent or ''), '^claude%-cli/(%d[%d%.]*) %(external, cli%)$')
+  if not version then
+    return nil
+  end
+  local parts = {}
+  for component in string.gmatch(version, '[^%.]+') do
+    local value = tonumber(component)
+    if not value or value < 0 or value > 9999 then
+      return nil
+    end
+    table.insert(parts, value)
+  end
+  if #parts < 2 or #parts > 4 then
+    return nil
+  end
+  return string.format('%04d.%04d.%04d.%04d', parts[1] or 0, parts[2] or 0, parts[3] or 0, parts[4] or 0)
+end
+
+if action == 'clear' then
+  local generation = redis.call('INCR', generationKey)
+  redis.call('DEL', cacheKey, verifiedKey, versionSortKey)
+  return {1, tostring(generation)}
+end
+
+if getGeneration() ~= expectedGeneration then
+  return {-1, redis.call('GET', cacheKey) or ''}
+end
+
+local currentUserAgent = redis.call('GET', cacheKey) or ''
+
+if action == 'store' then
+  local currentSort = redis.call('GET', versionSortKey)
+  if not currentSort and currentUserAgent ~= '' then
+    currentSort = getVersionSort(currentUserAgent)
+  end
+  if currentUserAgent ~= '' and currentSort and currentSort >= candidateSort then
+    return {0, currentUserAgent}
+  end
+  redis.call('MSET', cacheKey, candidateUserAgent, verifiedKey, candidateUserAgent, versionSortKey, candidateSort)
+  return {1, candidateUserAgent}
+end
+
+if currentUserAgent ~= expectedUserAgent then
+  return {2, currentUserAgent}
+end
+
+if action == 'verify' then
+  redis.call('MSET', verifiedKey, expectedUserAgent, versionSortKey, candidateSort)
+  redis.call('PERSIST', cacheKey)
+  return {1, expectedUserAgent}
+end
+
+if action == 'delete' then
+  local currentSort = redis.call('GET', versionSortKey)
+  if not currentSort and currentUserAgent ~= '' then
+    currentSort = getVersionSort(currentUserAgent)
+  end
+  local verifiedUserAgent = redis.call('GET', verifiedKey) or ''
+  if candidateSort ~= '' and verifiedUserAgent == currentUserAgent and currentSort and currentSort > candidateSort then
+    return {0, currentUserAgent}
+  end
+  redis.call('DEL', cacheKey, verifiedKey, versionSortKey)
+  return {1, ''}
+end
+
+return {3, currentUserAgent}
+`
 
 // structuredClone polyfill for Node < 17
 const safeClone =
@@ -57,8 +145,10 @@ class ClaudeRelayService {
     this.toolNameSuffixGeneratedAt = 0
     this.toolNameSuffixTtlMs = 60 * 60 * 1000
     this._claudeCodeVersionRefreshPromise = null
-    this._pendingClaudeCodeUserAgent = null
+    this._pendingClaudeCodeUserAgents = new Map()
+    this._claudeCodePendingEpoch = 0
     this._claudeCodeVersionRetryAfter = 0
+    this._claudeCodeVersionForceRefreshAfter = 0
     this._claudeCodeVersionRetryTimer = null
   }
 
@@ -178,7 +268,7 @@ class ClaudeRelayService {
 
   _isClaudeCodeUserAgent(clientHeaders) {
     const userAgent = clientHeaders?.['user-agent'] || clientHeaders?.['User-Agent']
-    return typeof userAgent === 'string' && /^claude-cli\/[^\s]+\s+\(/i.test(userAgent)
+    return extractClaudeCodeVersionFromUserAgent(userAgent) !== null
   }
 
   _getServerBillingHeaderConfig() {
@@ -188,8 +278,6 @@ class ClaudeRelayService {
         billingConfig.enabled === true ||
         process.env.ENABLE_SERVER_BILLING_HEADER === '1' ||
         process.env.CLAUDE_CODE_BILLING_HEADER_ENABLED === '1',
-      versionOverride:
-        billingConfig.versionOverride || process.env.CLAUDE_CODE_VERSION_OVERRIDE || null,
       entrypoint:
         billingConfig.entrypoint || process.env.CLAUDE_CODE_ENTRYPOINT || CLAUDE_CODE_ENTRYPOINT
     }
@@ -221,10 +309,7 @@ class ClaudeRelayService {
       return false
     }
 
-    const version =
-      typeof billingConfig.versionOverride === 'string' && billingConfig.versionOverride.trim()
-        ? billingConfig.versionOverride.trim()
-        : extractClaudeCodeVersionFromUserAgent(outgoingUserAgent)
+    const version = extractClaudeCodeVersionFromUserAgent(outgoingUserAgent)
 
     if (!version) {
       logger.debug(
@@ -1296,6 +1381,7 @@ class ClaudeRelayService {
 
     const result = []
     const pending = []
+    let pendingIndex = 0
     for (const block of content) {
       if (isThinking(block)) {
         // 上一个 emit 的也是 thinking → 推迟当前块
@@ -1307,15 +1393,16 @@ class ClaudeRelayService {
       } else {
         result.push(block)
         // 在该非 thinking 块之后冲一个 pending thinking 出来
-        if (pending.length > 0) {
-          result.push(pending.shift())
+        if (pendingIndex < pending.length) {
+          result.push(pending[pendingIndex])
+          pendingIndex += 1
         }
       }
     }
 
     // 病态情况：剩余 pending thinking 直接追加在末尾（仍相邻，无法化解）
-    for (const t of pending) {
-      result.push(t)
+    for (; pendingIndex < pending.length; pendingIndex += 1) {
+      result.push(pending[pendingIndex])
     }
     return result
   }
@@ -1499,7 +1586,7 @@ class ClaudeRelayService {
     }
 
     if (typeof processedBody.system === 'string') {
-      if (processedBody.system.trim().startsWith('x-anthropic-billing-header')) {
+      if (processedBody.system.trim().toLowerCase().startsWith('x-anthropic-billing-header')) {
         logger.debug('🧹 Removed billing header from string system prompt')
         delete processedBody.system
       }
@@ -1514,7 +1601,7 @@ class ClaudeRelayService {
             item &&
             item.type === 'text' &&
             typeof item.text === 'string' &&
-            item.text.trim().startsWith('x-anthropic-billing-header')
+            item.text.trim().toLowerCase().startsWith('x-anthropic-billing-header')
           )
       )
       if (processedBody.system.length < originalLength) {
@@ -1813,17 +1900,9 @@ class ClaudeRelayService {
     headers['accept-encoding'] = 'identity'
 
     const headerUserAgent = this._getHeaderValueCaseInsensitive(headers, 'user-agent')
-    const clientClaudeCodeUserAgent = this._isClaudeCodeUserAgent(clientHeaders)
-      ? this._getHeaderValueCaseInsensitive(clientHeaders, 'user-agent')
-      : null
-    const defaultClaudeCodeUserAgent = claudeCodeHeadersService.defaultHeaders?.['user-agent']
-    const accountClaudeCodeUserAgent =
-      headerUserAgent && headerUserAgent !== defaultClaudeCodeUserAgent ? headerUserAgent : null
-    const dynamicBillingUserAgent =
-      unifiedUA || clientClaudeCodeUserAgent || accountClaudeCodeUserAgent
-
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
-    const userAgent = unifiedUA || headerUserAgent || 'claude-cli/1.0.119 (external, cli)'
+    const candidateUserAgent = unifiedUA || headerUserAgent || CLAUDE_CODE_FALLBACK_USER_AGENT
+    const userAgent = await this._getVerifiedOutgoingClaudeCodeUserAgent(candidateUserAgent)
     const acceptHeader = headers['accept'] || 'application/json'
     delete headers['user-agent']
     delete headers['accept']
@@ -1832,11 +1911,7 @@ class ClaudeRelayService {
 
     logger.debug(`🔗 Request User-Agent: ${headers['User-Agent']}`)
 
-    // Upstream opencode-anthropic-auth prepends a CCH billing header to
-    // system[0]. We do the same only when we have a dynamic Claude Code UA
-    // source (client, cached unified UA, or stored account headers), so
-    // cc_version does not silently follow a hardcoded fallback UA.
-    this._injectServerBillingHeader(requestPayload, dynamicBillingUserAgent)
+    this._injectServerBillingHeader(requestPayload, userAgent)
 
     // 序列化请求体，计算 content-length（必须在 billing header 注入后）
     const bodyString = JSON.stringify(requestPayload)
@@ -3449,31 +3524,72 @@ class ClaudeRelayService {
     // 当前已知格式：claude-cli/1.0.102 (external, cli)
     const clientUA = clientHeaders?.['user-agent'] || clientHeaders?.['User-Agent']
     const clientVersionMatch = clientUA?.match(CLAUDE_CODE_UA_PATTERN)
-    let cachedUA = await redis.client.get(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
-    const cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
+    const [initialCachedUA, generationValue] = await redis.client.mget(
+      CLAUDE_CODE_USER_AGENT_CACHE_KEY,
+      CLAUDE_CODE_GENERATION_CACHE_KEY
+    )
+    const generation = generationValue || '0'
+    let cachedUA = initialCachedUA
+    let cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
     let publishedVersions = null
-    let cacheWasWritten = false
 
     if (cachedUA && !cachedVersionMatch) {
-      await redis.client.del(CLAUDE_CODE_USER_AGENT_CACHE_KEY, CLAUDE_CODE_VERIFIED_CACHE_KEY)
-      logger.warn('⚠️ Removed invalid unified Claude Code User-Agent cache')
-      cachedUA = null
+      const mutation = await this._mutateUnifiedUserAgentCache('delete', generation, cachedUA)
+      cachedUA = mutation.userAgent
+      cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
+      if (mutation.status === 1) {
+        logger.warn('⚠️ Removed invalid unified Claude Code User-Agent cache')
+      }
     } else if (cachedUA) {
       const verifiedUA = await redis.client.get(CLAUDE_CODE_VERIFIED_CACHE_KEY)
       if (verifiedUA !== cachedUA) {
         publishedVersions = await this._getCachedPublishedClaudeCodeVersions()
         if (!publishedVersions) {
           await redis.client.persist(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
-          this._scheduleOfficialClaudeCodeVersionRefresh(clientVersionMatch?.[0] ? clientUA : null)
+          this._scheduleOfficialClaudeCodeVersionRefresh(
+            clientVersionMatch?.[0] ? clientUA : null,
+            generation
+          )
           return cachedUA
         }
 
         if (publishedVersions.has(cachedVersionMatch[1])) {
-          await redis.client.set(CLAUDE_CODE_VERIFIED_CACHE_KEY, cachedUA)
+          const mutation = await this._mutateUnifiedUserAgentCache(
+            'verify',
+            generation,
+            cachedUA,
+            null,
+            this._getClaudeCodeVersionSortKey(cachedVersionMatch[1])
+          )
+          cachedUA = mutation.userAgent
+          cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
         } else {
-          await redis.client.del(CLAUDE_CODE_USER_AGENT_CACHE_KEY, CLAUDE_CODE_VERIFIED_CACHE_KEY)
-          logger.warn('⚠️ Removed unpublished unified Claude Code User-Agent cache')
-          cachedUA = null
+          const mutation = await this._mutateUnifiedUserAgentCache(
+            'delete',
+            generation,
+            cachedUA,
+            null,
+            this._getGreatestPublishedClaudeCodeVersionSortKey(publishedVersions)
+          )
+          cachedUA = mutation.userAgent
+          cachedVersionMatch = cachedUA?.match(CLAUDE_CODE_UA_PATTERN)
+          if (mutation.status === 1) {
+            logger.warn('⚠️ Removed unpublished unified Claude Code User-Agent cache')
+          } else if (mutation.status === 0) {
+            this._scheduleOfficialClaudeCodeVersionRefresh(
+              clientVersionMatch?.[0] ? clientUA : null,
+              generation,
+              true
+            )
+          }
+        }
+      } else {
+        publishedVersions = await this._getCachedPublishedClaudeCodeVersions()
+        if (!publishedVersions) {
+          this._scheduleOfficialClaudeCodeVersionRefresh(
+            clientVersionMatch?.[0] ? clientUA : null,
+            generation
+          )
         }
       }
     }
@@ -3484,37 +3600,128 @@ class ClaudeRelayService {
         publishedVersions =
           publishedVersions || (await this._getCachedPublishedClaudeCodeVersions())
         if (!publishedVersions) {
-          this._scheduleOfficialClaudeCodeVersionRefresh(clientUA)
+          this._scheduleOfficialClaudeCodeVersionRefresh(clientUA, generation)
           return cachedUA
         }
 
         if (publishedVersions.has(clientVersionMatch[1])) {
-          await redis.client.mset(
-            CLAUDE_CODE_USER_AGENT_CACHE_KEY,
+          const mutation = await this._mutateUnifiedUserAgentCache(
+            'store',
+            generation,
+            cachedUA,
             clientUA,
-            CLAUDE_CODE_VERIFIED_CACHE_KEY,
-            clientUA
+            this._getClaudeCodeVersionSortKey(clientVersionMatch[1])
           )
-          if (cachedUA) {
+          const previousUA = cachedUA
+          cachedUA = mutation.userAgent
+          if (mutation.status === 1 && previousUA) {
             logger.info(
-              `🔄 Updated to newer Claude Code User-Agent: ${clientUA} (was: ${cachedUA})`
+              `🔄 Updated to newer Claude Code User-Agent: ${clientUA} (was: ${previousUA})`
             )
-          } else {
+          } else if (mutation.status === 1) {
             logger.info(`📱 Captured unified Claude Code User-Agent: ${clientUA}`)
           }
-          cachedUA = clientUA
-          cacheWasWritten = true
         } else {
           logger.warn(`⚠️ Ignored unpublished Claude Code version: ${clientVersionMatch[1]}`)
+          this._scheduleOfficialClaudeCodeVersionRefresh(clientUA, generation, true)
         }
       }
     }
 
-    if (cachedUA && !cacheWasWritten) {
+    if (cachedUA) {
       await redis.client.persist(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
     }
 
     return cachedUA // 没有缓存返回 null
+  }
+
+  _getClaudeCodeVersionSortKey(version) {
+    if (!CLAUDE_CODE_VERSION_PATTERN.test(version)) {
+      return null
+    }
+    const parts = version.split('.').map((part) => Number.parseInt(part, 10))
+    while (parts.length < 4) {
+      parts.push(0)
+    }
+    return parts.map((part) => String(part).padStart(4, '0')).join('.')
+  }
+
+  _getGreatestPublishedClaudeCodeVersionSortKey(publishedVersions) {
+    let greatestSort = ''
+    for (const version of publishedVersions) {
+      const sort = this._getClaudeCodeVersionSortKey(version)
+      if (sort > greatestSort) {
+        greatestSort = sort
+      }
+    }
+    return greatestSort
+  }
+
+  async _getVerifiedOutgoingClaudeCodeUserAgent(candidateUserAgent) {
+    if (candidateUserAgent === CLAUDE_CODE_FALLBACK_USER_AGENT) {
+      return candidateUserAgent
+    }
+
+    const version = extractClaudeCodeVersionFromUserAgent(candidateUserAgent)
+    if (!version) {
+      return CLAUDE_CODE_FALLBACK_USER_AGENT
+    }
+
+    const verifiedUserAgent = await redis.client.get(CLAUDE_CODE_VERIFIED_CACHE_KEY)
+    if (verifiedUserAgent === candidateUserAgent) {
+      return candidateUserAgent
+    }
+
+    const publishedVersions = await this._getCachedPublishedClaudeCodeVersions()
+    if (publishedVersions?.has(version)) {
+      return candidateUserAgent
+    }
+
+    const generation = (await redis.client.get(CLAUDE_CODE_GENERATION_CACHE_KEY)) || '0'
+    this._scheduleOfficialClaudeCodeVersionRefresh(
+      candidateUserAgent,
+      generation,
+      publishedVersions !== null
+    )
+    return CLAUDE_CODE_FALLBACK_USER_AGENT
+  }
+
+  async _mutateUnifiedUserAgentCache(
+    action,
+    expectedGeneration = '',
+    expectedUserAgent = '',
+    candidateUserAgent = '',
+    candidateSort = ''
+  ) {
+    const result = await redis.client.eval(
+      CLAUDE_CODE_CACHE_MUTATION_SCRIPT,
+      4,
+      CLAUDE_CODE_USER_AGENT_CACHE_KEY,
+      CLAUDE_CODE_VERIFIED_CACHE_KEY,
+      CLAUDE_CODE_GENERATION_CACHE_KEY,
+      CLAUDE_CODE_VERSION_SORT_CACHE_KEY,
+      action,
+      expectedGeneration || '',
+      expectedUserAgent || '',
+      candidateUserAgent || '',
+      candidateSort || ''
+    )
+    return {
+      status: Number(result?.[0]),
+      userAgent: result?.[1] || null
+    }
+  }
+
+  async clearUnifiedUserAgentCache() {
+    if (this._claudeCodeVersionRetryTimer) {
+      clearTimeout(this._claudeCodeVersionRetryTimer)
+      this._claudeCodeVersionRetryTimer = null
+    }
+    this._pendingClaudeCodeUserAgents.clear()
+    this._claudeCodePendingEpoch += 1
+    this._claudeCodeVersionRetryAfter = 0
+    this._claudeCodeVersionForceRefreshAfter = 0
+    return this._mutateUnifiedUserAgentCache('clear')
   }
 
   async _getCachedPublishedClaudeCodeVersions() {
@@ -3540,13 +3747,39 @@ class ClaudeRelayService {
     }
   }
 
-  _scheduleOfficialClaudeCodeVersionRefresh(clientUA) {
+  _scheduleOfficialClaudeCodeVersionRefresh(clientUA, generation = null, forceRefresh = false) {
     const clientVersionMatch = clientUA?.match(CLAUDE_CODE_UA_PATTERN)
-    if (clientVersionMatch && !this._pendingClaudeCodeUserAgent) {
-      this._pendingClaudeCodeUserAgent = clientUA
+    if (generation !== null) {
+      const generationKey = String(generation || '0')
+      let pending = this._pendingClaudeCodeUserAgents.get(generationKey)
+      if (!pending) {
+        pending = { candidates: new Map(), epoch: this._claudeCodePendingEpoch }
+        this._pendingClaudeCodeUserAgents.set(generationKey, pending)
+        while (this._pendingClaudeCodeUserAgents.size > CLAUDE_CODE_PENDING_GENERATION_LIMIT) {
+          const oldestGeneration = this._pendingClaudeCodeUserAgents.keys().next().value
+          this._pendingClaudeCodeUserAgents.delete(oldestGeneration)
+        }
+      }
+      if (clientVersionMatch) {
+        this._addPendingClaudeCodeCandidate(pending, clientVersionMatch[1], clientUA)
+      }
     }
 
+    if (forceRefresh && Date.now() < this._claudeCodeVersionForceRefreshAfter) {
+      this._claudeCodeVersionRetryAfter = Math.max(
+        this._claudeCodeVersionRetryAfter,
+        this._claudeCodeVersionForceRefreshAfter
+      )
+      this._scheduleOfficialClaudeCodeVersionRetry()
+      return
+    }
     if (this._claudeCodeVersionRefreshPromise || Date.now() < this._claudeCodeVersionRetryAfter) {
+      if (!this._claudeCodeVersionRefreshPromise) {
+        this._scheduleOfficialClaudeCodeVersionRetry()
+      }
+      return
+    }
+    if (this._pendingClaudeCodeUserAgents.size === 0) {
       return
     }
 
@@ -3570,12 +3803,40 @@ class ClaudeRelayService {
           CLAUDE_CODE_PUBLISHED_VERSIONS_TTL_SECONDS
         )
         this._claudeCodeVersionRetryAfter = 0
+        this._claudeCodeVersionForceRefreshAfter = Date.now() + CLAUDE_CODE_VERSION_RETRY_DELAY_MS
 
-        const pendingUA = this._pendingClaudeCodeUserAgent
-        this._pendingClaudeCodeUserAgent = null
-        await this.captureAndGetUnifiedUserAgent(pendingUA ? { 'user-agent': pendingUA } : {}, {
-          useUnifiedUserAgent: 'true'
-        })
+        const pendingEntries = [...this._pendingClaudeCodeUserAgents.entries()]
+        for (const [pendingGeneration, pending] of pendingEntries) {
+          if (this._pendingClaudeCodeUserAgents.get(pendingGeneration) !== pending) {
+            continue
+          }
+          this._pendingClaudeCodeUserAgents.delete(pendingGeneration)
+          try {
+            await this._reconcileUnifiedUserAgentCache(
+              pendingGeneration,
+              pending,
+              new Set(publishedVersions)
+            )
+          } catch (error) {
+            if (pending.epoch === this._claudeCodePendingEpoch) {
+              let queued = this._pendingClaudeCodeUserAgents.get(pendingGeneration)
+              if (!queued || queued.epoch !== this._claudeCodePendingEpoch) {
+                queued = { candidates: new Map(), epoch: this._claudeCodePendingEpoch }
+                this._pendingClaudeCodeUserAgents.set(pendingGeneration, queued)
+                while (
+                  this._pendingClaudeCodeUserAgents.size > CLAUDE_CODE_PENDING_GENERATION_LIMIT
+                ) {
+                  const oldestGeneration = this._pendingClaudeCodeUserAgents.keys().next().value
+                  this._pendingClaudeCodeUserAgents.delete(oldestGeneration)
+                }
+              }
+              for (const [version, userAgent] of pending.candidates) {
+                this._addPendingClaudeCodeCandidate(queued, version, userAgent)
+              }
+            }
+            throw error
+          }
+        }
       })
       .catch((error) => {
         this._claudeCodeVersionRetryAfter = Date.now() + CLAUDE_CODE_VERSION_RETRY_DELAY_MS
@@ -3585,10 +3846,33 @@ class ClaudeRelayService {
       .finally(() => {
         if (this._claudeCodeVersionRefreshPromise === refreshPromise) {
           this._claudeCodeVersionRefreshPromise = null
+          if (this._pendingClaudeCodeUserAgents.size > 0) {
+            this._scheduleOfficialClaudeCodeVersionRefresh()
+          }
         }
       })
 
     this._claudeCodeVersionRefreshPromise = refreshPromise
+  }
+
+  _addPendingClaudeCodeCandidate(pending, version, userAgent) {
+    pending.candidates.set(version, userAgent)
+    if (pending.candidates.size <= CLAUDE_CODE_PENDING_CANDIDATE_LIMIT) {
+      return
+    }
+
+    let lowestVersion = null
+    let lowestUserAgent = null
+    for (const [candidateVersion, candidateUserAgent] of pending.candidates) {
+      if (
+        lowestUserAgent === null ||
+        this.compareClaudeCodeVersions(lowestUserAgent, candidateUserAgent)
+      ) {
+        lowestVersion = candidateVersion
+        lowestUserAgent = candidateUserAgent
+      }
+    }
+    pending.candidates.delete(lowestVersion)
   }
 
   _scheduleOfficialClaudeCodeVersionRetry() {
@@ -3600,9 +3884,63 @@ class ClaudeRelayService {
     this._claudeCodeVersionRetryTimer = setTimeout(() => {
       this._claudeCodeVersionRetryTimer = null
       this._claudeCodeVersionRetryAfter = 0
-      this._scheduleOfficialClaudeCodeVersionRefresh(this._pendingClaudeCodeUserAgent)
+      this._scheduleOfficialClaudeCodeVersionRefresh()
     }, delay)
     this._claudeCodeVersionRetryTimer.unref?.()
+  }
+
+  async _reconcileUnifiedUserAgentCache(generation, pending, publishedVersions) {
+    const currentGeneration = (await redis.client.get(CLAUDE_CODE_GENERATION_CACHE_KEY)) || '0'
+    if (currentGeneration !== generation) {
+      return null
+    }
+
+    let currentUA = await redis.client.get(CLAUDE_CODE_USER_AGENT_CACHE_KEY)
+    const currentVersionMatch = currentUA?.match(CLAUDE_CODE_UA_PATTERN)
+    if (currentUA) {
+      if (!currentVersionMatch || !publishedVersions.has(currentVersionMatch[1])) {
+        const mutation = await this._mutateUnifiedUserAgentCache(
+          'delete',
+          generation,
+          currentUA,
+          null,
+          this._getGreatestPublishedClaudeCodeVersionSortKey(publishedVersions)
+        )
+        currentUA = mutation.userAgent
+      } else {
+        const mutation = await this._mutateUnifiedUserAgentCache(
+          'verify',
+          generation,
+          currentUA,
+          null,
+          this._getClaudeCodeVersionSortKey(currentVersionMatch[1])
+        )
+        currentUA = mutation.userAgent
+      }
+    }
+
+    let bestCandidate = null
+    for (const [version, userAgent] of pending.candidates) {
+      if (
+        publishedVersions.has(version) &&
+        (!bestCandidate || this.compareClaudeCodeVersions(userAgent, bestCandidate.userAgent))
+      ) {
+        bestCandidate = { version, userAgent }
+      }
+    }
+
+    if (bestCandidate) {
+      const mutation = await this._mutateUnifiedUserAgentCache(
+        'store',
+        generation,
+        currentUA,
+        bestCandidate.userAgent,
+        this._getClaudeCodeVersionSortKey(bestCandidate.version)
+      )
+      currentUA = mutation.userAgent
+    }
+
+    return currentUA
   }
 
   async _fetchOfficialClaudeCodeVersions() {
@@ -3639,19 +3977,14 @@ class ClaudeRelayService {
   // 返回 true 表示 newUA 版本更新，需要更新缓存
   compareClaudeCodeVersions(newUA, cachedUA) {
     try {
-      // 提取版本号：claude-cli/1.0.102 (external, cli) -> 1.0.102
-      // 支持多段版本号格式，如 1.0.102、2.1.0.beta1 等
-      const newVersionMatch = newUA.match(/claude-cli\/([\d.]+(?:[a-zA-Z0-9-]*)?)/i)
-      const cachedVersionMatch = cachedUA.match(/claude-cli\/([\d.]+(?:[a-zA-Z0-9-]*)?)/i)
+      const newVersion = extractClaudeCodeVersionFromUserAgent(newUA)
+      const cachedVersion = extractClaudeCodeVersionFromUserAgent(cachedUA)
 
-      if (!newVersionMatch || !cachedVersionMatch) {
+      if (!newVersion || !cachedVersion) {
         // 无法解析版本号，优先使用新的
         logger.warn(`⚠️ Unable to parse Claude Code versions: new=${newUA}, cached=${cachedUA}`)
         return true
       }
-
-      const newVersion = newVersionMatch[1]
-      const cachedVersion = cachedVersionMatch[1]
 
       // 比较版本号 (semantic version)
       const compareResult = this.compareSemanticVersions(newVersion, cachedVersion)

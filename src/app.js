@@ -230,15 +230,31 @@ class Application {
       }
 
       // 🔧 基础中间件
+      const claudeRequestMaxSizeMb =
+        Number.parseInt(process.env.CLAUDE_REQUEST_MAX_SIZE_MB || '10', 10) || 10
+      const verifyJsonBody = (req, res, buf, encoding) => {
+        if (buf && buf.length && !buf.toString(encoding || 'utf8').trim()) {
+          throw new Error('Invalid JSON: empty body')
+        }
+      }
+      this.app.use(
+        [
+          '/api/v1/messages',
+          '/api/claude/v1/messages',
+          '/claude/v1/messages',
+          '/claude/claude/v1/messages',
+          '/antigravity/api/v1/messages',
+          '/antigravity/api/claude/v1/messages',
+          '/gemini-cli/api/v1/messages',
+          '/gemini-cli/api/claude/v1/messages'
+        ],
+        express.json({ limit: `${claudeRequestMaxSizeMb}mb`, verify: verifyJsonBody }),
+        express.urlencoded({ extended: true, limit: `${claudeRequestMaxSizeMb}mb` })
+      )
       this.app.use(
         express.json({
           limit: '100mb',
-          verify: (req, res, buf, encoding) => {
-            // 验证JSON格式
-            if (buf && buf.length && !buf.toString(encoding || 'utf8').trim()) {
-              throw new Error('Invalid JSON: empty body')
-            }
-          }
+          verify: verifyJsonBody
         })
       )
       this.app.use(express.urlencoded({ extended: true, limit: '100mb' }))

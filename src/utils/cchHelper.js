@@ -40,6 +40,10 @@ const CCH_POSITIONS = [4, 7, 20]
 // Reference only. Do NOT use as a live default; parse the outgoing UA instead.
 const CLAUDE_CODE_VERSION = '2.1.87'
 const CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
+const CLAUDE_CODE_VERSION_PATTERN = /^\d{1,4}(?:\.\d{1,4}){1,3}$/
+const CLAUDE_CODE_USER_AGENT_PATTERN =
+  /^claude-cli\/(\d{1,4}(?:\.\d{1,4}){1,3}) \(external, cli\)$/i
+const CCH_ENTRYPOINT_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0
@@ -50,7 +54,7 @@ function isNonEmptyString(value) {
  *
  * Examples:
  *   claude-cli/2.1.87 (external, cli)      → 2.1.87
- *   claude-cli/2.1.0-beta.1 (external, cli) → 2.1.0-beta.1
+ *   claude-cli/2.1.87.1 (external, cli)    → 2.1.87.1
  *
  * @param {string} userAgent
  * @returns {string|null}
@@ -59,7 +63,7 @@ function extractClaudeCodeVersionFromUserAgent(userAgent) {
   if (!isNonEmptyString(userAgent)) {
     return null
   }
-  const match = userAgent.match(/^claude-cli\/([^\s]+)\s+\(/i)
+  const match = userAgent.match(CLAUDE_CODE_USER_AGENT_PATTERN)
   return match ? match[1] : null
 }
 
@@ -136,7 +140,12 @@ function computeVersionSuffix(messageText, version) {
  * @returns {string|null} full `x-anthropic-billing-header: ...;` line, or null when version missing
  */
 function buildBillingHeaderValue(messages, version, entrypoint = CLAUDE_CODE_ENTRYPOINT) {
-  if (!isNonEmptyString(version)) {
+  if (
+    !isNonEmptyString(version) ||
+    !CLAUDE_CODE_VERSION_PATTERN.test(version) ||
+    !isNonEmptyString(entrypoint) ||
+    !CCH_ENTRYPOINT_PATTERN.test(entrypoint)
+  ) {
     return null
   }
   const text = extractFirstUserMessageText(messages)

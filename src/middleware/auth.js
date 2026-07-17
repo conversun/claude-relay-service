@@ -2077,7 +2077,13 @@ const globalRateLimit = async (req, res, next) =>
 
 // 📊 请求大小限制中间件
 const requestSizeLimit = (req, res, next) => {
-  const MAX_SIZE_MB = parseInt(process.env.REQUEST_MAX_SIZE_MB || '100', 10)
+  const isClaudeMessagesPath =
+    /^(?:\/api|\/claude|\/antigravity\/api|\/gemini-cli\/api)(?:\/claude)?\/v1\/messages(?:\/|$)/.test(
+      req.path
+    )
+  const MAX_SIZE_MB = isClaudeMessagesPath
+    ? parseInt(process.env.CLAUDE_REQUEST_MAX_SIZE_MB || '10', 10)
+    : parseInt(process.env.REQUEST_MAX_SIZE_MB || '100', 10)
   const maxSize = MAX_SIZE_MB * 1024 * 1024
   const contentLength = parseInt(req.headers['content-length'] || '0')
 

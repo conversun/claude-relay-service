@@ -242,10 +242,15 @@ describe('cchHelper / edge cases', () => {
       )
     })
 
-    it('extracts prerelease/build-shaped versions without forcing semver parsing', () => {
-      expect(extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.0-beta.1 (external, cli)')).toBe(
-        '2.1.0-beta.1'
-      )
+    it('rejects prerelease and field-injection shaped versions', () => {
+      expect(
+        extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.0-beta.1 (external, cli)')
+      ).toBeNull()
+      expect(
+        extractClaudeCodeVersionFromUserAgent(
+          'claude-cli/2.1.87;cc_entrypoint=attacker (external, cli)'
+        )
+      ).toBeNull()
     })
 
     it('returns null for non-Claude-Code or malformed user agents', () => {
@@ -253,6 +258,14 @@ describe('cchHelper / edge cases', () => {
       expect(extractClaudeCodeVersionFromUserAgent('claude-cli/2.1.87')).toBeNull()
       expect(extractClaudeCodeVersionFromUserAgent('')).toBeNull()
       expect(extractClaudeCodeVersionFromUserAgent(null)).toBeNull()
+    })
+  })
+
+  describe('billing field validation', () => {
+    it('rejects versions and entrypoints that could inject extra billing fields', () => {
+      const messages = [{ role: 'user', content: 'hello' }]
+      expect(buildBillingHeaderValue(messages, '2.1.87;cc_entrypoint=attacker')).toBeNull()
+      expect(buildBillingHeaderValue(messages, '2.1.87', 'sdk-cli; cch=attacker')).toBeNull()
     })
   })
 
