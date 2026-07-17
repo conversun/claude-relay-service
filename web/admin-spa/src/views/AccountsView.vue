@@ -7,10 +7,10 @@
             账户管理
           </h3>
           <p class="text-sm text-gray-600 dark:text-gray-400 sm:text-base">
-            管理 Claude、Gemini、OpenAI 等账户<span class="whitespace-nowrap">与代理配置</span>
+            管理 Claude、Gemini、OpenAI 等账户与代理配置
           </p>
         </div>
-        <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <!-- 筛选器组 -->
           <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
             <!-- 排序选择器 -->
@@ -96,7 +96,7 @@
             </div>
           </div>
 
-          <div class="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
             <!-- 账户统计按钮 -->
             <div class="relative">
               <el-tooltip content="查看账户统计汇总" effect="dark" placement="bottom">
@@ -251,7 +251,7 @@
                   </div>
                 </th>
                 <th
-                  class="name-column sticky z-20 min-w-[220px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
+                  class="name-column sticky z-20 min-w-[180px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                   :class="shouldShowCheckboxes ? 'left-[50px]' : 'left-0'"
                   @click="sortAccounts('name')"
                 >
@@ -435,7 +435,7 @@
                   class="min-w-[80px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                   @click="sortAccounts('priority')"
                 >
-                  调度
+                  优先级
                   <i
                     v-if="accountsSortBy === 'priority'"
                     :class="[
@@ -511,19 +511,19 @@
                         </div>
                         <span
                           v-if="account.accountType === 'dedicated'"
-                          class="inline-flex flex-shrink-0 items-center whitespace-nowrap rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800"
+                          class="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800"
                         >
                           <i class="fas fa-lock mr-1" />专属
                         </span>
                         <span
                           v-else-if="account.accountType === 'group'"
-                          class="inline-flex flex-shrink-0 items-center whitespace-nowrap rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800"
+                          class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800"
                         >
                           <i class="fas fa-layer-group mr-1" />分组调度
                         </span>
                         <span
                           v-else
-                          class="inline-flex flex-shrink-0 items-center whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
+                          class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
                         >
                           <i class="fas fa-share-alt mr-1" />共享
                         </span>
@@ -1237,18 +1237,16 @@
                       account.platform === 'droid' ||
                       account.platform === 'gemini-api'
                     "
-                    :aria-label="getSchedulingHint(account)"
                     class="flex items-center gap-2"
-                    :title="getSchedulingHint(account)"
                   >
                     <div class="h-2 w-16 rounded-full bg-gray-200">
                       <div
                         class="h-2 rounded-full bg-gradient-to-r from-green-500 to-blue-600 transition-all duration-300"
-                        :style="{ width: getSchedulingStrength(account) + '%' }"
+                        :style="{ width: 101 - (account.priority || 50) + '%' }"
                       />
                     </div>
                     <span class="min-w-[20px] text-xs font-medium text-gray-700 dark:text-gray-200">
-                      {{ getSchedulingLabel(account) }} {{ account.priority || 50 }}
+                      {{ account.priority || 50 }}
                     </span>
                   </div>
                   <div v-else class="text-sm text-gray-400">
@@ -1836,10 +1834,9 @@
               </span>
             </div>
 
+            <!-- 调度优先级 -->
             <div class="flex items-center justify-between text-xs">
-              <span class="text-gray-500 dark:text-gray-400">{{
-                getSchedulingLabel(account)
-              }}</span>
+              <span class="text-gray-500 dark:text-gray-400">优先级</span>
               <span class="font-medium text-gray-700 dark:text-gray-200">
                 {{ account.priority || 50 }}
               </span>
@@ -1855,10 +1852,10 @@
           </div>
 
           <!-- 操作按钮 -->
-          <div class="mt-3 grid grid-cols-3 gap-2 border-t border-gray-100 pt-3">
+          <div class="mt-3 flex gap-2 border-t border-gray-100 pt-3">
             <button
               v-if="showResetButton(account)"
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-amber-50 px-2 py-2 text-xs text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
               :disabled="account.isResetting"
               @click="resetAccountStatus(account)"
             >
@@ -1866,7 +1863,7 @@
               重置
             </button>
             <button
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg px-2 py-2 text-xs transition-colors"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs transition-colors"
               :class="
                 account.schedulable
                   ? 'bg-gray-50 text-gray-600 hover:bg-gray-100'
@@ -1881,14 +1878,14 @@
 
             <button
               v-if="canViewUsage(account)"
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-indigo-50 px-2 py-2 text-xs text-indigo-600 transition-colors hover:bg-indigo-100"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 transition-colors hover:bg-indigo-100"
               @click="openAccountUsageModal(account)"
             >
               <i class="fas fa-chart-line" />
               详情
             </button>
             <button
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-red-50 px-2 py-2 text-xs text-red-600 transition-colors hover:bg-red-100 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-800/50"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 transition-colors hover:bg-red-100 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-800/50"
               @click="openErrorHistory(account)"
             >
               <i class="fas fa-exclamation-triangle" />
@@ -1896,7 +1893,7 @@
             </button>
             <button
               v-if="canTestAccount(account)"
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-cyan-50 px-2 py-2 text-xs text-cyan-600 transition-colors hover:bg-cyan-100 dark:bg-cyan-900/40 dark:text-cyan-300 dark:hover:bg-cyan-800/50"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-600 transition-colors hover:bg-cyan-100 dark:bg-cyan-900/40 dark:text-cyan-300 dark:hover:bg-cyan-800/50"
               @click="openAccountTestModal(account)"
             >
               <i class="fas fa-vial" />
@@ -1905,7 +1902,7 @@
 
             <button
               v-if="canTestAccount(account)"
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-amber-50 px-2 py-2 text-xs text-amber-600 transition-colors hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-600 transition-colors hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
               @click="openScheduledTestModal(account)"
             >
               <i class="fas fa-clock" />
@@ -1913,19 +1910,18 @@
             </button>
 
             <button
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-gray-50 px-2 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-100"
+              class="flex-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-100"
               @click="editAccount(account)"
             >
-              <i class="fas fa-edit" />
+              <i class="fas fa-edit mr-1" />
               编辑
             </button>
 
             <button
-              class="flex items-center justify-center gap-1 whitespace-nowrap rounded-lg bg-red-50 px-2 py-2 text-xs text-red-600 transition-colors hover:bg-red-100"
+              class="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 transition-colors hover:bg-red-100"
               @click="deleteAccount(account)"
             >
               <i class="fas fa-trash" />
-              删除
             </button>
           </div>
         </div>
@@ -2359,17 +2355,6 @@ const TEMP_UNAVAILABLE_ACCOUNT_TYPE_ALIASES = {
   azure_openai: ['azure-openai'],
   'azure-openai': ['azure-openai']
 }
-
-const usesSchedulingWeight = (account) => account?.priorityMode === 'weight'
-const getSchedulingLabel = (account) => (usesSchedulingWeight(account) ? '权重' : '优先级')
-const getSchedulingStrength = (account) => {
-  const value = Math.min(100, Math.max(1, Number(account?.priority) || 50))
-  return usesSchedulingWeight(account) ? value : 101 - value
-}
-const getSchedulingHint = (account) =>
-  usesSchedulingWeight(account)
-    ? `权重 ${account?.priority || 50}，数字越大分配流量越多`
-    : `优先级 ${account?.priority || 50}，数字越小优先级越高`
 
 const resolveTempUnavailableStatusForAccount = (tempStatuses, account) => {
   if (!tempStatuses || !account) return null
