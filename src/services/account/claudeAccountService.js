@@ -91,6 +91,7 @@ class ClaudeAccountService {
       accountType = 'shared', // 'dedicated' or 'shared'
       platform = 'claude',
       priority = 50, // 调度优先级 (1-100，数字越小优先级越高)
+      priorityMode = null,
       schedulable = true, // 是否可被调度
       subscriptionInfo = null, // 手动设置的订阅信息
       autoStopOnWarning = false, // 5小时使用量接近限制时自动停止调度
@@ -136,6 +137,7 @@ class ClaudeAccountService {
         accountType, // 账号类型：'dedicated' 或 'shared' 或 'group'
         platform,
         priority: priority.toString(), // 调度优先级
+        priorityMode: priorityMode === 'weight' ? 'weight' : '',
         createdAt: new Date().toISOString(),
         lastUsedAt: '',
         lastRefreshAt: '',
@@ -182,6 +184,7 @@ class ClaudeAccountService {
         accountType, // 账号类型：'dedicated' 或 'shared' 或 'group'
         platform,
         priority: priority.toString(), // 调度优先级
+        priorityMode: priorityMode === 'weight' ? 'weight' : '',
         createdAt: new Date().toISOString(),
         lastUsedAt: '',
         lastRefreshAt: '',
@@ -239,6 +242,7 @@ class ClaudeAccountService {
       accountType,
       platform,
       priority,
+      priorityMode: priorityMode === 'weight' ? 'weight' : null,
       status: accountData.status,
       createdAt: accountData.createdAt,
       expiresAt: accountData.expiresAt,
@@ -599,6 +603,7 @@ class ClaudeAccountService {
             errorMessage: account.errorMessage,
             accountType: account.accountType || 'shared', // 兼容旧数据，默认为共享
             priority: parseInt(account.priority) || 50, // 兼容旧数据，默认优先级50
+            priorityMode: account.priorityMode === 'weight' ? 'weight' : null,
             platform: account.platform || 'claude', // 添加平台标识，用于前端区分
             authType, // OAuth 或 Setup Token
             createdAt: account.createdAt,
@@ -756,6 +761,7 @@ class ClaudeAccountService {
         'claudeAiOauth',
         'accountType',
         'priority',
+        'priorityMode',
         'schedulable',
         'subscriptionInfo',
         'autoStopOnWarning',
@@ -785,6 +791,8 @@ class ClaudeAccountService {
             updatedData[field] = value ? JSON.stringify(value) : ''
           } else if (field === 'priority' || field === 'maxConcurrency') {
             updatedData[field] = value.toString()
+          } else if (field === 'priorityMode') {
+            updatedData[field] = value === 'weight' ? 'weight' : ''
           } else if (field === 'disableTempUnavailable') {
             updatedData[field] = parseBooleanLike(value) ? 'true' : 'false'
           } else if (

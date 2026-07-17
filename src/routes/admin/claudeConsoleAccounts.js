@@ -123,6 +123,7 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       apiUrl,
       apiKey,
       priority,
+      priorityMode,
       supportedModels,
       userAgent,
       rateLimitDuration,
@@ -143,6 +144,9 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
     // 验证priority的有效性（1-100）
     if (priority !== undefined && (priority < 1 || priority > 100)) {
       return res.status(400).json({ error: 'Priority must be between 1 and 100' })
+    }
+    if (priorityMode !== undefined && priorityMode !== 'weight') {
+      return res.status(400).json({ error: 'Priority mode must be "weight" when provided' })
     }
 
     // 验证maxConcurrentTasks的有效性（非负整数）
@@ -175,6 +179,7 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       apiUrl,
       apiKey,
       priority: priority || 50,
+      priorityMode,
       supportedModels: supportedModels || [],
       userAgent,
       rateLimitDuration:
@@ -222,6 +227,9 @@ router.put('/claude-console-accounts/:accountId', authenticateAdmin, async (req,
       (mappedUpdates.priority < 1 || mappedUpdates.priority > 100)
     ) {
       return res.status(400).json({ error: 'Priority must be between 1 and 100' })
+    }
+    if (mappedUpdates.priorityMode !== undefined && mappedUpdates.priorityMode !== 'weight') {
+      return res.status(400).json({ error: 'Priority mode must be "weight" when provided' })
     }
 
     // 验证maxConcurrentTasks的有效性（非负整数）

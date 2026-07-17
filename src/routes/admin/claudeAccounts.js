@@ -616,6 +616,7 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       accountType,
       platform = 'claude',
       priority,
+      priorityMode,
       groupId,
       groupIds,
       autoStopOnWarning,
@@ -656,6 +657,9 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
     ) {
       return res.status(400).json({ error: 'Priority must be a number between 1 and 100' })
     }
+    if (priorityMode !== undefined && priorityMode !== 'weight') {
+      return res.status(400).json({ error: 'Priority mode must be "weight" when provided' })
+    }
 
     const { normalized: normalizedTempUnavailablePolicy, error: tempUnavailablePolicyError } =
       normalizeTempUnavailablePolicyPayload({
@@ -678,6 +682,7 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       accountType: accountType || 'shared', // 默认为共享类型
       platform,
       priority: priority || 50, // 默认优先级为50
+      priorityMode,
       autoStopOnWarning: autoStopOnWarning === true, // 默认为false
       useUnifiedUserAgent: useUnifiedUserAgent === true, // 默认为false
       useUnifiedClientId: useUnifiedClientId === true, // 默认为false
@@ -730,6 +735,9 @@ router.put('/claude-accounts/:accountId', authenticateAdmin, async (req, res) =>
         mappedUpdates.priority > 100)
     ) {
       return res.status(400).json({ error: 'Priority must be a number between 1 and 100' })
+    }
+    if (mappedUpdates.priorityMode !== undefined && mappedUpdates.priorityMode !== 'weight') {
+      return res.status(400).json({ error: 'Priority mode must be "weight" when provided' })
     }
 
     const { normalized: normalizedTempUnavailablePolicy, error: tempUnavailablePolicyError } =

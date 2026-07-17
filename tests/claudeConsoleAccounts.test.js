@@ -29,6 +29,7 @@ jest.mock('../src/routes/admin/utils', () => ({
 }))
 
 const claudeConsoleRelayService = require('../src/services/relay/claudeConsoleRelayService')
+const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const claudeConsoleAccountsRouter = require('../src/routes/admin/claudeConsoleAccounts')
 
 describe('POST /admin/claude-console-accounts/:accountId/test', () => {
@@ -69,5 +70,49 @@ describe('POST /admin/claude-console-accounts/:accountId/test', () => {
       expect.any(Object),
       'claude-sonnet-4-6'
     )
+  })
+})
+
+describe('POST /admin/claude-console-accounts scheduling mode', () => {
+  const buildApp = () => {
+    const app = express()
+    app.use(express.json())
+    app.use('/admin', claudeConsoleAccountsRouter)
+    return app
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    claudeConsoleAccountService.createAccount = jest.fn().mockResolvedValue({
+      id: 'console-1',
+      name: 'weighted'
+    })
+  })
+
+  it('passes an explicit weight marker through account creation', async () => {
+    const response = await request(buildApp()).post('/admin/claude-console-accounts').send({
+      name: 'weighted',
+      apiUrl: 'https://example.com',
+      apiKey: 'secret',
+      priority: 80,
+      priorityMode: 'weight'
+    })
+
+    expect(response.status).toBe(200)
+    expect(claudeConsoleAccountService.createAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ priority: 80, priorityMode: 'weight' })
+    )
+  })
+
+  it('rejects unknown scheduling markers instead of changing semantics', async () => {
+    const response = await request(buildApp()).post('/admin/claude-console-accounts').send({
+      name: 'invalid',
+      apiUrl: 'https://example.com',
+      apiKey: 'secret',
+      priorityMode: 'direct'
+    })
+
+    expect(response.status).toBe(400)
+    expect(claudeConsoleAccountService.createAccount).not.toHaveBeenCalled()
   })
 })

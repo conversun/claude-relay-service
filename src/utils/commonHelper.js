@@ -231,8 +231,11 @@ const sortAccountsByPriority = (accounts) =>
     return createdA - createdB
   })
 
-// 获取账户调度权重（priority 越大权重越大）
-const getAccountWeight = (account) => clamp(safeParseInt(account?.priority, 50), 1, 100)
+// 获取账户调度权重；新账户使用直接权重，历史 priority 保留数字越小优先级越高的语义
+const getAccountWeight = (account) => {
+  const value = clamp(safeParseInt(account?.priority, 50), 1, 100)
+  return account?.priorityMode === 'weight' ? value : 101 - value
+}
 
 // 按权重比例随机选择账户
 const selectAccountByWeight = (accounts) => {
@@ -256,7 +259,7 @@ const selectAccountByWeight = (accounts) => {
 // 计算账户「重置临近度」偏置因子：越临近重置，因子越大（消费即将作废的额度）
 // 缺失/无法解析重置信息时返回 1（退化为纯优先级权重，向后兼容）
 // horizonHours 为参考视野，maxBias 限制最大偏置，避免单账户被打爆雪崩
-const getResetBiasFactor = (account, horizonHours = 24, maxBias = 4) => {
+const getResetBiasFactor = (account, horizonHours = 5, maxBias = 4) => {
   const raw = account?.sessionWindowEnd || account?.rateLimitEndAt
   if (!raw) {
     return 1
@@ -267,7 +270,7 @@ const getResetBiasFactor = (account, horizonHours = 24, maxBias = 4) => {
   }
   const remainingHours = (resetMs - Date.now()) / 3600000
   if (remainingHours <= 0) {
-    return maxBias
+    return 1
   }
   return clamp(horizonHours / remainingHours, 1, maxBias)
 }
@@ -298,8 +301,13 @@ const selectAccountByWeightWithResetBias = (accounts) => {
 // 用会话窗口信息(getSessionWindowInfo 返回的 windowEnd)富化账户的 sessionWindowEnd，
 // 使 reset 偏置对未被 429 的健康账户也生效。纯函数，便于单测；空/无 windowEnd 时不改动。
 const applyResetWindow = (account, sessionWindowInfo) => {
-  if (account && sessionWindowInfo && sessionWindowInfo.windowEnd) {
+  if (!account) {
+    return account
+  }
+  if (sessionWindowInfo?.hasActiveWindow === true && sessionWindowInfo.windowEnd) {
     account.sessionWindowEnd = sessionWindowInfo.windowEnd
+  } else {
+    delete account.sessionWindowEnd
   }
   return account
 }

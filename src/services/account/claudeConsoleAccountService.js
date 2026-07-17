@@ -59,6 +59,7 @@ class ClaudeConsoleAccountService {
       apiUrl = '',
       apiKey = '',
       priority = 50, // 默认优先级50（1-100）
+      priorityMode = null,
       supportedModels = [], // 支持的模型列表或映射表，空数组/对象表示支持所有
       userAgent = 'claude-cli/1.0.69 (external, cli)',
       rateLimitDuration = 60, // 限流时间（分钟）
@@ -91,6 +92,7 @@ class ClaudeConsoleAccountService {
       apiUrl,
       apiKey: this._encryptSensitiveData(apiKey),
       priority: priority.toString(),
+      priorityMode: priorityMode === 'weight' ? 'weight' : '',
       supportedModels: JSON.stringify(processedModels),
       userAgent,
       rateLimitDuration: rateLimitDuration.toString(),
@@ -145,6 +147,7 @@ class ClaudeConsoleAccountService {
       description,
       apiUrl,
       priority,
+      priorityMode: priorityMode === 'weight' ? 'weight' : null,
       supportedModels,
       userAgent,
       rateLimitDuration,
@@ -201,6 +204,7 @@ class ClaudeConsoleAccountService {
             description: accountData.description,
             apiUrl: accountData.apiUrl,
             priority: parseInt(accountData.priority) || 50,
+            priorityMode: accountData.priorityMode === 'weight' ? 'weight' : null,
             supportedModels: JSON.parse(accountData.supportedModels || '[]'),
             userAgent: accountData.userAgent,
             rateLimitDuration: Number.isNaN(parseInt(accountData.rateLimitDuration))
@@ -271,6 +275,7 @@ class ClaudeConsoleAccountService {
 
     accountData.supportedModels = parsedModels
     accountData.priority = parseInt(accountData.priority) || 50
+    accountData.priorityMode = accountData.priorityMode === 'weight' ? 'weight' : null
     {
       const _parsedDuration = parseInt(accountData.rateLimitDuration)
       accountData.rateLimitDuration = Number.isNaN(_parsedDuration) ? 60 : _parsedDuration
@@ -328,6 +333,9 @@ class ClaudeConsoleAccountService {
       }
       if (updates.priority !== undefined) {
         updatedData.priority = updates.priority.toString()
+      }
+      if (updates.priorityMode !== undefined) {
+        updatedData.priorityMode = updates.priorityMode === 'weight' ? 'weight' : ''
       }
       if (updates.supportedModels !== undefined) {
         logger.debug(`[DEBUG] Updating supportedModels: ${JSON.stringify(updates.supportedModels)}`)

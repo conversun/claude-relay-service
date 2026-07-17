@@ -85,19 +85,19 @@
 
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
-                >优先级</label
-              >
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">{{
+                schedulingCopy.label
+              }}</label>
               <input
                 v-model.number="form.priority"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                 max="100"
                 min="1"
-                placeholder="默认50，数字越小优先级越高"
+                :placeholder="schedulingCopy.placeholder"
                 type="number"
               />
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                建议范围：1-100，数字越小优先级越高
+                {{ schedulingCopy.help }}
               </p>
             </div>
             <div>
@@ -282,6 +282,7 @@ const form = ref({
   apiUrl: '',
   apiKey: '',
   priority: 50,
+  priorityMode: null,
   userAgent: '',
   rateLimitDuration: 60,
   dailyQuota: 0,
@@ -289,6 +290,21 @@ const form = ref({
   proxy: null,
   supportedModels: {}
 })
+
+const usesSchedulingWeight = computed(() => !isEdit.value || form.value.priorityMode === 'weight')
+const schedulingCopy = computed(() =>
+  usesSchedulingWeight.value
+    ? {
+        label: '调度权重 (1-100)',
+        placeholder: '默认50，数字越大分配流量越多',
+        help: '按权重随机分配，数字越大分配到的流量越多。'
+      }
+    : {
+        label: '调度优先级 (1-100)',
+        placeholder: '默认50，数字越小优先级越高',
+        help: '按优先级调度，数字越小优先级越高。'
+      }
+)
 
 const enableRateLimit = ref(true)
 const errors = ref({})
@@ -334,6 +350,7 @@ const submit = async () => {
         description: form.value.description,
         apiUrl: form.value.apiUrl,
         priority: form.value.priority,
+        priorityMode: usesSchedulingWeight.value ? 'weight' : undefined,
         userAgent: form.value.userAgent,
         rateLimitDuration: enableRateLimit.value ? Number(form.value.rateLimitDuration || 60) : 0,
         dailyQuota: Number(form.value.dailyQuota || 0),
@@ -359,6 +376,7 @@ const submit = async () => {
         apiUrl: form.value.apiUrl,
         apiKey: form.value.apiKey,
         priority: Number(form.value.priority || 50),
+        priorityMode: 'weight',
         supportedModels: buildSupportedModels(),
         userAgent: form.value.userAgent,
         rateLimitDuration: enableRateLimit.value ? Number(form.value.rateLimitDuration || 60) : 0,
@@ -389,6 +407,7 @@ const populateFromAccount = () => {
   form.value.description = a.description || ''
   form.value.apiUrl = a.apiUrl || ''
   form.value.priority = Number(a.priority || 50)
+  form.value.priorityMode = a.priorityMode || null
   form.value.userAgent = a.userAgent || ''
   form.value.rateLimitDuration = Number(a.rateLimitDuration || 60)
   form.value.dailyQuota = Number(a.dailyQuota || 0)

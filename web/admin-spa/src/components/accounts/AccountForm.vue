@@ -1983,19 +1983,19 @@
 
             <!-- 所有平台的优先级设置 -->
             <div>
-              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
-                >调度权重 (1-100)</label
-              >
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">{{
+                schedulingCopy.label
+              }}</label>
               <input
                 v-model.number="form.priority"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
                 max="100"
                 min="1"
-                placeholder="数字越大，权重越高，默认50"
+                :placeholder="schedulingCopy.placeholder"
                 type="number"
               />
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Claude 账号按权重随机分配，数字越大流量越多；其他平台仍按优先级。建议 1-100
+                {{ schedulingCopy.help }}
               </p>
             </div>
 
@@ -3006,19 +3006,19 @@
 
           <!-- 所有平台的优先级设置（编辑模式） -->
           <div>
-            <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
-              >调度权重 (1-100)</label
-            >
+            <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">{{
+              schedulingCopy.label
+            }}</label>
             <input
               v-model.number="form.priority"
               class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
               max="100"
               min="1"
-              placeholder="数字越大，权重越高"
+              :placeholder="schedulingCopy.placeholder"
               type="number"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Claude 账号按权重随机分配，数字越大流量越多；其他平台仍按优先级。建议 1-100
+              {{ schedulingCopy.help }}
             </p>
           </div>
 
@@ -4340,6 +4340,7 @@ const form = ref({
   apiUrl: props.account?.apiUrl || '',
   apiKey: props.account?.apiKey || '',
   priority: props.account?.priority || 50,
+  priorityMode: props.account?.priorityMode || null,
   endpointType: props.account?.endpointType || 'anthropic',
   // OpenAI-Responses 特定字段
   baseApi: props.account?.baseApi || '',
@@ -4407,6 +4408,29 @@ const form = ref({
   })(),
   expiresAt: props.account?.expiresAt || null
 })
+
+const usesSchedulingWeight = computed(() => {
+  if (isEdit.value) {
+    return form.value.priorityMode === 'weight'
+  }
+  return form.value.platform === 'claude' || form.value.platform === 'claude-console'
+})
+
+const schedulingCopy = computed(() =>
+  usesSchedulingWeight.value
+    ? {
+        label: '调度权重 (1-100)',
+        placeholder: '默认50，数字越大分配流量越多',
+        help: '按权重随机分配，数字越大分配到的流量越多。'
+      }
+    : {
+        label: '调度优先级 (1-100)',
+        placeholder: '默认50，数字越小优先级越高',
+        help: '按优先级调度，数字越小优先级越高。'
+      }
+)
+
+const getPriorityModePayload = () => (usesSchedulingWeight.value ? 'weight' : undefined)
 
 const buildClaudeTempUnavailablePolicyPayload = () => ({
   disableTempUnavailable: !!form.value.disableTempUnavailable,
@@ -4938,6 +4962,7 @@ const buildClaudeAccountData = (tokenInfo, accountName, clientId) => {
     proxy: proxyPayload,
     claudeAiOauth: claudeOauthPayload,
     priority: form.value.priority || 50,
+    priorityMode: getPriorityModePayload(),
     autoStopOnWarning: form.value.autoStopOnWarning || false,
     interceptWarmup: form.value.interceptWarmup || false,
     useUnifiedUserAgent: form.value.useUnifiedUserAgent || false,
@@ -5042,7 +5067,8 @@ const handleOAuthSuccess = async (tokenInfoOrList) => {
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
       expiresAt: form.value.expiresAt || undefined,
-      proxy: proxyPayload
+      proxy: proxyPayload,
+      priorityMode: getPriorityModePayload()
     }
 
     if (currentPlatform === 'claude') {
@@ -5395,7 +5421,8 @@ const createAccount = async () => {
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
       expiresAt: form.value.expiresAt || undefined,
-      proxy: proxyPayload
+      proxy: proxyPayload,
+      priorityMode: getPriorityModePayload()
     }
 
     if (form.value.platform === 'claude') {
@@ -5700,7 +5727,8 @@ const updateAccount = async () => {
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
       expiresAt: form.value.expiresAt || undefined,
-      proxy: proxyPayload
+      proxy: proxyPayload,
+      priorityMode: form.value.priorityMode === 'weight' ? 'weight' : undefined
     }
 
     // 只有非空时才更新token
@@ -6467,6 +6495,7 @@ watch(
         apiUrl: newAccount.apiUrl || '',
         apiKey: '', // 编辑模式不显示现有的 API Key
         priority: newAccount.priority || 50,
+        priorityMode: newAccount.priorityMode || null,
         supportedModels: (() => {
           const models = newAccount.supportedModels
           if (!models) return []

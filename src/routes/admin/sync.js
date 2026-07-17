@@ -210,6 +210,7 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
         crs_is_active: account.isActive === 'true',
         crs_schedulable: account.schedulable !== 'false',
         crs_priority: Number.parseInt(account.priority, 10) || 50,
+        crs_priority_mode: account.priorityMode === 'weight' ? 'weight' : undefined,
         crs_status: account.status || 'active',
         crs_scopes: scopes,
         crs_subscription_info: account.subscriptionInfo || undefined
@@ -225,6 +226,7 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
         isActive: account.isActive === 'true',
         schedulable: account.schedulable !== 'false',
         priority: Number.parseInt(account.priority, 10) || 50,
+        priorityMode: account.priorityMode === 'weight' ? 'weight' : undefined,
         status: account.status || 'active',
         proxy,
         credentials,
@@ -266,6 +268,7 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
         isActive: full.isActive === true,
         schedulable: full.schedulable !== false,
         priority: Number.parseInt(full.priority, 10) || 50,
+        priorityMode: full.priorityMode === 'weight' ? 'weight' : undefined,
         status: full.status || 'active',
         proxy,
         maxConcurrentTasks: Number.parseInt(full.maxConcurrentTasks, 10) || 0,
@@ -280,6 +283,7 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
           crs_is_active: full.isActive === true,
           crs_schedulable: full.schedulable !== false,
           crs_priority: Number.parseInt(full.priority, 10) || 50,
+          crs_priority_mode: full.priorityMode === 'weight' ? 'weight' : undefined,
           crs_status: full.status || 'active'
         }
       })
