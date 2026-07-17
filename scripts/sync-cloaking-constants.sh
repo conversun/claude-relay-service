@@ -57,7 +57,7 @@ extract_ts_string() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     process.stdout.write(m[2]);
   ' "${upstream_ts}" "$1"
 }
@@ -73,9 +73,10 @@ extract_ts_string_array() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const entries = Array.from(m[1].matchAll(/[\x27"]([^\x27"]+)[\x27"]/g))
       .map(x => x[1]);
+    if (entries.length === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     for (const e of entries) process.stdout.write(e + "\n");
   ' "${upstream_ts}" "$1"
 }
@@ -91,8 +92,9 @@ extract_ts_number_array() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const nums = Array.from(m[1].matchAll(/-?\d+(?:\.\d+)?/g)).map(x => x[0]);
+    if (nums.length === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     process.stdout.write(nums.join(","));
   ' "${upstream_ts}" "$1"
 }
@@ -108,12 +110,15 @@ extract_ts_replacement_pairs() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*,?\s*\}/g;
     let pair;
+    let count = 0;
     while ((pair = objRe.exec(m[1])) !== null) {
+      count += 1;
       process.stdout.write(pair[1] + "=>" + pair[2] + "\n");
     }
+    if (count === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
   ' "${upstream_ts}" "$1"
 }
 
@@ -134,7 +139,7 @@ extract_js_string() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     process.stdout.write(m[2]);
   ' "$1" "$2"
 }
@@ -150,9 +155,10 @@ extract_js_string_array() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const entries = Array.from(m[1].matchAll(/[\x27"]([^\x27"]+)[\x27"]/g))
       .map(x => x[1]);
+    if (entries.length === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     for (const e of entries) process.stdout.write(e + "\n");
   ' "$1" "$2"
 }
@@ -168,12 +174,15 @@ extract_js_replacement_pairs() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const objRe = /\{\s*match:\s*[\x27"]([^\x27"]+)[\x27"]\s*,\s*replacement:\s*[\x27"]([^\x27"]+)[\x27"]\s*,?\s*\}/g;
     let pair;
+    let count = 0;
     while ((pair = objRe.exec(m[1])) !== null) {
+      count += 1;
       process.stdout.write(pair[1] + "=>" + pair[2] + "\n");
     }
+    if (count === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
   ' "$1" "$2"
 }
 
@@ -188,8 +197,9 @@ extract_js_number_array() {
       "m"
     );
     const m = src.match(re);
-    if (!m) { process.exit(3); }
+    if (!m) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     const nums = Array.from(m[1].matchAll(/-?\d+(?:\.\d+)?/g)).map(x => x[0]);
+    if (nums.length === 0) { console.error("ERROR: failed to parse " + name); process.exit(2); }
     process.stdout.write(nums.join(","));
   ' "$1" "$2"
 }
@@ -224,14 +234,14 @@ fi
 if [[ "${upstream_anchors}" != "${local_anchors}" ]]; then
   echo "DRIFT: PARAGRAPH_REMOVAL_ANCHORS"
   diff <(printf '%s\n' "${local_anchors}") <(printf '%s\n' "${upstream_anchors}") \
-    | sed 's/^/  /'
+    | sed 's/^/  /' || true
   drift=1
 fi
 
 if [[ "${upstream_pairs}" != "${local_pairs}" ]]; then
   echo "DRIFT: TEXT_REPLACEMENTS"
   diff <(printf '%s\n' "${local_pairs}") <(printf '%s\n' "${upstream_pairs}") \
-    | sed 's/^/  /'
+    | sed 's/^/  /' || true
   drift=1
 fi
 
